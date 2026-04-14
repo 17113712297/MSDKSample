@@ -1,0 +1,30 @@
+apply from:rootProject.file('dependencies.gradle')
+
+buildscript {
+    repositories {
+        google()
+        jcenter()
+        mavenCentral()
+    }
+    dependencies {
+        // 推荐的Android Gradle Plugin版本，不做强求，可以自定适配需要的版本。但是如果你需要引入UXSDK框架，则建议使用推荐版本，否则可能会出现编译兼容性问题。
+        classpath "com.android.tools.build:gradle:8.7.0"
+
+        //推荐的Kotlin版本，如果你需要引入UXSDK框架，则建议使用推荐版本，否则可能会出现编译兼容性问题
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0" //DJI MSDK 建议的版本
+        // ... (remaining code)
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        jcenter()
+        mavenCentral()
+    }
+}
+
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
