@@ -35,7 +35,7 @@ import dji.v5.ux.visualcamera.zoom.FocalZoomWidget
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import java.util.concurrent.TimeUnit
-
+import android.content.Intent
 class MainActivity : AppCompatActivity() {
 
     companion object {
@@ -118,7 +118,10 @@ class MainActivity : AppCompatActivity() {
         btnLensWide    = findViewById(R.id.btnLensWide)
         btnLensZoom    = findViewById(R.id.btnLensZoom)
         btnLensThermal = findViewById(R.id.btnLensThermal)
-
+        val btnPsdkTest = findViewById<Button>(R.id.btnPsdkTest)
+        btnPsdkTest.setOnClickListener {
+            startActivity(Intent(this, PayloadCommTestActivity::class.java))
+        }
         xSpeedText        = findViewById(R.id.xSpeedText)
         ySpeedText        = findViewById(R.id.ySpeedText)
         zSpeedText        = findViewById(R.id.zSpeedText)

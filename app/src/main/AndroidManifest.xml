@@ -30,12 +30,15 @@
 
         <meta-data
             android:name="com.dji.sdk.API_KEY"
-            android:value="91f7d6136e41c515ccaec03c"/>
+            android:value="61bf39186ae7db7239f159e3"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:label="@string/app_name"
             android:theme="@style/Theme.MSDKSample">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
@@ -51,6 +54,12 @@
                 android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
                 android:resource="@xml/accessory_filter" />
         </activity>
+        <activity
+            android:name=".PayloadCommTestActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:windowSoftInputMode="adjustResize" />
+
     </application>
 
 </manifest>

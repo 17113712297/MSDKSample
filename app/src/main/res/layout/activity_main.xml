@@ -58,6 +58,21 @@
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:layout_marginStart="8dp" />
+        <Button
+            android:id="@+id/btnPsdkTest"
+            android:layout_width="wrap_content"
+            android:layout_height="30dp"
+            android:layout_marginStart="8dp"
+            android:text="PSDK"
+            android:textSize="10sp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:backgroundTint="#1976D2"
+            android:textColor="#FFFFFF" />
+
+
 
     </LinearLayout>
 
