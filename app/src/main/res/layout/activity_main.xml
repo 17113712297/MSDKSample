@@ -296,6 +296,12 @@
         android:layout_alignParentBottom="true"
         android:layout_marginEnd="16dp"
         android:layout_marginBottom="16dp" />
-
+    <Button
+        android:id="@+id/btnDroneControl"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="飞控面板"
+        android:backgroundTint="#1565C0"
+        android:textColor="#FFFFFF" />
 </RelativeLayout>
 
