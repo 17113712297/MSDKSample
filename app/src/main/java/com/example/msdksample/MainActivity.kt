@@ -122,6 +122,11 @@ class MainActivity : AppCompatActivity() {
         btnPsdkTest.setOnClickListener {
             startActivity(Intent(this, PayloadCommTestActivity::class.java))
         }
+        val btnDroneControl = findViewById<Button>(R.id.btnDroneControl)
+        btnDroneControl.setOnClickListener {
+            startActivity(Intent(this, DroneControlActivity::class.java))
+        }
+
         xSpeedText        = findViewById(R.id.xSpeedText)
         ySpeedText        = findViewById(R.id.ySpeedText)
         zSpeedText        = findViewById(R.id.zSpeedText)
@@ -145,6 +150,7 @@ class MainActivity : AppCompatActivity() {
         setupLensButtons()
 
         window.decorView.postDelayed({ reattachStatusWidgets() }, REATTACH_DELAY)
+        startForegroundService(Intent(this, DroneControlService::class.java))
     }
 
     override fun onResume() {
