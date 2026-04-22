@@ -118,14 +118,6 @@ class MainActivity : AppCompatActivity() {
         btnLensWide    = findViewById(R.id.btnLensWide)
         btnLensZoom    = findViewById(R.id.btnLensZoom)
         btnLensThermal = findViewById(R.id.btnLensThermal)
-        val btnPsdkTest = findViewById<Button>(R.id.btnPsdkTest)
-        btnPsdkTest.setOnClickListener {
-            startActivity(Intent(this, PayloadCommTestActivity::class.java))
-        }
-        val btnDroneControl = findViewById<Button>(R.id.btnDroneControl)
-        btnDroneControl.setOnClickListener {
-            startActivity(Intent(this, DroneControlActivity::class.java))
-        }
 
         xSpeedText        = findViewById(R.id.xSpeedText)
         ySpeedText        = findViewById(R.id.ySpeedText)

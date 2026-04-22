@@ -58,20 +58,6 @@
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:layout_marginStart="8dp" />
-        <Button
-            android:id="@+id/btnPsdkTest"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:layout_marginStart="8dp"
-            android:text="PSDK"
-            android:textSize="10sp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:minWidth="0dp"
-            android:minHeight="0dp"
-            android:backgroundTint="#1976D2"
-            android:textColor="#FFFFFF" />
-
 
 
     </LinearLayout>
@@ -296,12 +282,5 @@
         android:layout_alignParentBottom="true"
         android:layout_marginEnd="16dp"
         android:layout_marginBottom="16dp" />
-    <Button
-        android:id="@+id/btnDroneControl"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="飞控面板"
-        android:backgroundTint="#1565C0"
-        android:textColor="#FFFFFF" />
 </RelativeLayout>
 

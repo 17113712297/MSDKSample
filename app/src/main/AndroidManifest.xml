@@ -56,12 +56,6 @@
                 android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
                 android:resource="@xml/accessory_filter" />
         </activity>
-        <activity
-            android:name=".PayloadCommTestActivity"
-            android:exported="false"
-            android:screenOrientation="landscape"
-            android:windowSoftInputMode="adjustResize" />
-        <activity android:name=".DroneControlActivity" />
         <service
             android:name=".DroneControlService"
             android:exported="false"
