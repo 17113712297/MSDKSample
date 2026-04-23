@@ -2,19 +2,32 @@ package com.example.msdksample
 
 import android.app.*
 import android.content.Intent
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import dji.v5.manager.aircraft.payload.PayloadCenter
 import dji.v5.manager.aircraft.payload.PayloadIndexType
 import dji.v5.manager.aircraft.payload.listener.PayloadDataListener
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * DroneControlService
  *
- * 后台前台服务：常驻监听 PSDK 低速通道，分发飞控 / 云台 / 相机指令。
+ * 后台前台服务：常驻监听 PSDK 低速通道，分发飞控 / 云台 / 相机 / 配件指令。
  *
- * 帧分发逻辑与 DroneControlActivity.dispatchFrame() 保持一致。
+ * 设计要点：
+ *   1. 启动方式声明为 START_STICKY，被系统杀掉后会自动重启；
+ *      `onStartCommand` 中重新调用 `startForeground`，确保 5s 内挂上通知，
+ *      避免 ForegroundServiceDidNotStartInTimeException。
+ *   2. PayloadManager 在 SDK 未注册完毕时可能为 null，
+ *      `registerPayloadListener` 失败后会按指数退避自动重试。
+ *   3. dispatchFrame 严格根据 controller 的 Boolean 回调结果决定 ACK 状态，
+ *      不依赖 msg 字符串内容（旧实现用 contains("enabled") 会漏 ACK / 误 ACK）。
+ *   4. 维护 `currentLensCode`：用户从 UI 切镜头时调 `updateCurrentLens`，
+ *      Service 收到 CMD_CAM_ZOOM 切镜头时也会更新。CameraController.setVideoCfg
+ *      用这个 lens 选择正确的 KeyVideoResolutionFrameRate。
  */
 class DroneControlService : Service() {
 
@@ -22,6 +35,19 @@ class DroneControlService : Service() {
         private const val TAG = "DroneControlService"
         private const val CHANNEL_ID = "drone_ctrl_channel"
         private const val NOTIF_ID   = 1001
+
+        // PayloadListener 注册重试参数
+        private const val REG_RETRY_BASE_MS = 500L
+        private const val REG_RETRY_MAX_MS  = 8000L
+
+        /** 当前激活的镜头（被 MainActivity 与 Service 共享） */
+        @Volatile
+        var currentLensCode: Byte = DroneCommProtocol.CAM_LENS_WIDE
+            private set
+
+        fun updateCurrentLens(lensCode: Byte) {
+            currentLensCode = lensCode
+        }
     }
 
     private val droneCtrl    = DroneController()
@@ -29,6 +55,10 @@ class DroneControlService : Service() {
     private val cameraCtrl   = CameraController()
     private val auxLightCtrl = AuxLightController()
     private val payloadIndex = PayloadIndexType.UP
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val listenerRegistered = AtomicBoolean(false)
+    @Volatile private var nextRetryDelayMs = REG_RETRY_BASE_MS
 
     private val payloadDataListener = PayloadDataListener { bytes ->
         if (bytes == null || bytes.isEmpty()) return@PayloadDataListener
@@ -48,8 +78,22 @@ class DroneControlService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
-        registerPayloadListener()
+        // 把 CameraController 与 Service 关联，用于读取 currentLensCode
+        cameraCtrl.lensProvider = { currentLensCode }
+        scheduleRegisterPayloadListener(immediate = true)
         Log.i(TAG, "Service 已启动，监听中")
+    }
+
+    /**
+     * 系统重启 Service 时只走 onStartCommand（不走 onCreate），
+     * 这里再保险地 startForeground 一次，避免 5s 超时崩溃。
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(NOTIF_ID, buildNotification())
+        if (!listenerRegistered.get()) {
+            scheduleRegisterPayloadListener(immediate = true)
+        }
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -67,17 +111,15 @@ class DroneControlService : Service() {
 
             // ── 飞控 ────────────────────────────────────────
             DroneCommProtocol.CMD_TAKEOFF -> droneCtrl.takeoff { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_TAKEOFF,
-                    if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                sendAck(DroneCommProtocol.CMD_TAKEOFF, ackOf(ok))
             }
 
             DroneCommProtocol.CMD_LAND -> droneCtrl.land { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_LAND,
-                    if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                sendAck(DroneCommProtocol.CMD_LAND, ackOf(ok))
             }
 
-            DroneCommProtocol.CMD_HOVER -> droneCtrl.hover { _, _ ->
-                sendAck(DroneCommProtocol.CMD_HOVER, DroneCommProtocol.ACK_OK)
+            DroneCommProtocol.CMD_HOVER -> droneCtrl.hover { ok, _ ->
+                sendAck(DroneCommProtocol.CMD_HOVER, ackOf(ok))
             }
 
             DroneCommProtocol.CMD_VEL -> {
@@ -85,10 +127,9 @@ class DroneControlService : Service() {
                     sendAck(DroneCommProtocol.CMD_VEL, DroneCommProtocol.ACK_FAIL)
                     return
                 }
-                droneCtrl.sendVelocity(vel.vx, vel.vy, vel.vz, vel.yawRate) { _, msg ->
-                    if (msg.contains("enabled", ignoreCase = true)) {
-                        sendAck(DroneCommProtocol.CMD_VEL, DroneCommProtocol.ACK_OK)
-                    }
+                // 修正：严格根据 ok 回 ACK，不再用 msg.contains("enabled") 判断
+                droneCtrl.sendVelocity(vel.vx, vel.vy, vel.vz, vel.yawRate) { ok, _ ->
+                    sendAck(DroneCommProtocol.CMD_VEL, ackOf(ok))
                 }
             }
 
@@ -102,8 +143,7 @@ class DroneControlService : Service() {
                 }
                 Log.i(TAG, "GIMBAL_YAW_FOLLOW pitch=${p.pitch} roll=${p.roll}")
                 gimbalCtrl.setYawFollow(p.pitch, p.roll) { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_GIMBAL_YAW_FOLLOW,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    sendAck(DroneCommProtocol.CMD_GIMBAL_YAW_FOLLOW, ackOf(ok))
                 }
             }
 
@@ -118,8 +158,7 @@ class DroneControlService : Service() {
                 Log.i(TAG, "GIMBAL_ANGLE[$modeStr] pitch=${p.pitch} roll=${p.roll} " +
                            "yaw=${p.yaw} dur=${p.duration}s")
                 gimbalCtrl.rotateByAngle(p.mode, p.pitch, p.roll, p.yaw, p.duration) { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_GIMBAL_ANGLE,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    sendAck(DroneCommProtocol.CMD_GIMBAL_ANGLE, ackOf(ok))
                 }
             }
 
@@ -132,16 +171,15 @@ class DroneControlService : Service() {
                 }
                 Log.i(TAG, "CAM_MODE ${if (p.isPhoto) "PHOTO" else "VIDEO"}")
                 cameraCtrl.setMode(p.isPhoto) { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_CAM_MODE,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    sendAck(DroneCommProtocol.CMD_CAM_MODE, ackOf(ok))
                 }
             }
 
             DroneCommProtocol.CMD_CAM_SHOOT -> {
                 Log.i(TAG, "CAM_SHOOT")
+                // CameraController 内部会留 800ms 落盘等待再回调，再回 ACK
                 cameraCtrl.shootPhoto { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_CAM_SHOOT,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    sendAck(DroneCommProtocol.CMD_CAM_SHOOT, ackOf(ok))
                 }
             }
 
@@ -153,8 +191,7 @@ class DroneControlService : Service() {
                 }
                 Log.i(TAG, "CAM_RECORD ${if (p.isStart) "START" else "STOP"}")
                 val callback: (Boolean, String) -> Unit = { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_CAM_RECORD,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    sendAck(DroneCommProtocol.CMD_CAM_RECORD, ackOf(ok))
                 }
                 if (p.isStart) cameraCtrl.startRecord(callback)
                 else           cameraCtrl.stopRecord(callback)
@@ -167,10 +204,10 @@ class DroneControlService : Service() {
                     return
                 }
                 Log.i(TAG, "CAM_VIDEO_CFG res=0x${p.resolution.toUByte().toString(16)} " +
-                           "fps=0x${p.frameRate.toUByte().toString(16)}")
+                           "fps=0x${p.frameRate.toUByte().toString(16)} " +
+                           "lens=0x${currentLensCode.toUByte().toString(16)}")
                 cameraCtrl.setVideoCfg(p.resolution, p.frameRate) { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_CAM_VIDEO_CFG,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    sendAck(DroneCommProtocol.CMD_CAM_VIDEO_CFG, ackOf(ok))
                 }
             }
 
@@ -183,11 +220,12 @@ class DroneControlService : Service() {
                 Log.i(TAG, "CAM_ZOOM lens=0x${p.lens.toUByte().toString(16)} " +
                            "ratio=${if (p.shouldSetRatio) p.ratio else "keep"}")
                 cameraCtrl.setLensAndZoom(p.lens, p.shouldSetRatio, p.ratio) { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_CAM_ZOOM,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    if (ok) updateCurrentLens(p.lens)
+                    sendAck(DroneCommProtocol.CMD_CAM_ZOOM, ackOf(ok))
                 }
             }
-// ── 配件 ────────────────────────────────────────
+
+            // ── 配件 ────────────────────────────────────────
             DroneCommProtocol.CMD_AUX_LIGHT -> {
                 val p = DroneCommProtocol.parseAuxLightPayload(frame.payload) ?: run {
                     Log.e(TAG, "AUX_LIGHT 载荷解析失败 (len=${frame.payload.size})")
@@ -202,8 +240,7 @@ class DroneControlService : Service() {
                 }
                 Log.i(TAG, "AUX_LIGHT $modeStr")
                 auxLightCtrl.setBottomAuxLight(p.mode) { ok, _ ->
-                    sendAck(DroneCommProtocol.CMD_AUX_LIGHT,
-                        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                    sendAck(DroneCommProtocol.CMD_AUX_LIGHT, ackOf(ok))
                 }
             }
 
@@ -211,20 +248,68 @@ class DroneControlService : Service() {
         }
     }
 
+    private fun ackOf(ok: Boolean): Byte =
+        if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL
+
     // ── 低速通道工具 ──────────────────────────────────────
-    private fun registerPayloadListener() {
-        PayloadCenter.getInstance().payloadManager[payloadIndex]
-            ?.addPayloadDataListener(payloadDataListener)
-            ?: Log.e(TAG, "PayloadManager[$payloadIndex] 为空")
+
+    /**
+     * 注册 PayloadListener，失败按指数退避自动重试。
+     *
+     * Service 启动时 PSDK 设备可能尚未连接，PayloadManager[UP] 为 null。
+     * 旧实现仅打了一条日志就放弃，导致后续即使飞机连上也收不到帧。
+     */
+    private fun scheduleRegisterPayloadListener(immediate: Boolean) {
+        val delay = if (immediate) 0L else nextRetryDelayMs
+        mainHandler.postDelayed({ tryRegisterPayloadListener() }, delay)
+    }
+
+    private fun tryRegisterPayloadListener() {
+        if (listenerRegistered.get()) return
+
+        val mgr = try {
+            PayloadCenter.getInstance().payloadManager[payloadIndex]
+        } catch (e: Throwable) {
+            Log.w(TAG, "payloadManager 访问异常: ${e.message}")
+            null
+        }
+
+        if (mgr != null) {
+            mgr.addPayloadDataListener(payloadDataListener)
+            listenerRegistered.set(true)
+            nextRetryDelayMs = REG_RETRY_BASE_MS
+            Log.i(TAG, "PayloadListener 注册成功")
+            return
+        }
+
+        // 失败 → 指数退避重试 (上限 REG_RETRY_MAX_MS)
+        Log.w(TAG, "PayloadManager[$payloadIndex] 暂未就绪，${nextRetryDelayMs}ms 后重试")
+        scheduleRegisterPayloadListener(immediate = false)
+        nextRetryDelayMs = (nextRetryDelayMs * 2).coerceAtMost(REG_RETRY_MAX_MS)
     }
 
     private fun unregisterPayloadListener() {
-        PayloadCenter.getInstance().payloadManager[payloadIndex]
-            ?.removePayloadDataListener(payloadDataListener)
+        mainHandler.removeCallbacksAndMessages(null)
+        if (!listenerRegistered.get()) return
+        try {
+            PayloadCenter.getInstance().payloadManager[payloadIndex]
+                ?.removePayloadDataListener(payloadDataListener)
+        } catch (e: Throwable) {
+            Log.w(TAG, "removePayloadDataListener 异常: ${e.message}")
+        }
+        listenerRegistered.set(false)
     }
 
     private fun sendAck(ackedCmd: Byte, status: Byte) {
-        val mgr = PayloadCenter.getInstance().payloadManager[payloadIndex] ?: return
+        val mgr = try {
+            PayloadCenter.getInstance().payloadManager[payloadIndex]
+        } catch (e: Throwable) {
+            Log.w(TAG, "ACK send: payloadManager 访问异常: ${e.message}")
+            return
+        } ?: run {
+            Log.w(TAG, "ACK send: payloadManager 为空，ack 丢弃 cmd=0x${ackedCmd.toUByte().toString(16)}")
+            return
+        }
         mgr.sendDataToPayload(
             DroneCommProtocol.encodeAck(ackedCmd, status),
             object : dji.v5.common.callback.CommonCallbacks.CompletionCallback {
