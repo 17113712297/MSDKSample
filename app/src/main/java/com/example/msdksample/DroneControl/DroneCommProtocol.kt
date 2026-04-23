@@ -200,7 +200,13 @@ object DroneCommProtocol {
         val payload: ByteArray = ByteArray(0)
     )
 
-    /** 速度 (Body Frame)：vx 前向, vy 右向, vz 上向 (m/s)；yawRate 右转 (deg/s) */
+    /**
+     * 速度 (DJI 机体系 BODY + VELOCITY)
+     *   vx      : 前向 m/s  (正 = 前)
+     *   vy      : 右向 m/s  (正 = 右)
+     *   vz      : 上向 m/s  (正 = 上)
+     *   yawRate : 右转 deg/s (正 = 顺时针俯视)
+     */
     data class VelPayload(
         val vx: Float, val vy: Float, val vz: Float, val yawRate: Float
     )

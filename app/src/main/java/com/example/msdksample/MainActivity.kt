@@ -1,5 +1,6 @@
 package com.example.msdksample
 
+import android.content.Intent
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Handler
@@ -25,17 +26,17 @@ import dji.v5.et.create
 import dji.v5.manager.KeyManager
 import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.interfaces.ICameraStreamManager
-import dji.v5.ux.core.util.DataProcessor
-import dji.v5.ux.core.widget.fpv.FPVWidget
-import dji.v5.ux.core.widget.fpv.FPVStreamSourceListener
-import dji.v5.ux.cameracore.widget.cameracapture.shootphoto.ShootPhotoWidget
 import dji.v5.ux.cameracore.widget.cameracapture.recordvideo.RecordVideoWidget
+import dji.v5.ux.cameracore.widget.cameracapture.shootphoto.ShootPhotoWidget
 import dji.v5.ux.cameracore.widget.cameracontrols.photovideoswitch.PhotoVideoSwitchWidget
+import dji.v5.ux.core.util.DataProcessor
+import dji.v5.ux.core.widget.fpv.FPVStreamSourceListener
+import dji.v5.ux.core.widget.fpv.FPVWidget
 import dji.v5.ux.visualcamera.zoom.FocalZoomWidget
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import java.util.concurrent.TimeUnit
-import android.content.Intent
+
 class MainActivity : AppCompatActivity() {
 
     companion object {
@@ -58,6 +59,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLensThermal: Button
 
     // ── 左侧 HUD TextView ────────────────────────────────────────────
+    // 注：以下三个轴显示的是 DJI KeyAircraftVelocity 的字段值，
+    //     该值采用 NEU (North-East-Up) 大地坐标系，与机体系不同：
+    //       value.x = 北向速度 m/s   (正 = 向北)
+    //       value.y = 东向速度 m/s   (正 = 向东)
+    //       value.z = 垂直速度 m/s   (正 = 向上)
+    //     与 PSDK 协议里 VelPayload 的机体系 (前/右/上) 含义不同，
+    //     这里只用于显示当前实测速度，不能直接用作机体速度回放。
     private lateinit var xSpeedText: TextView
     private lateinit var ySpeedText: TextView
     private lateinit var zSpeedText: TextView
@@ -158,6 +166,9 @@ class MainActivity : AppCompatActivity() {
                             updateViewVisibility(lens)
                             updateAllWidgetSource(pos, lens)
                             updateLensButtonState(lens)
+                            // 修复：把 UI 端镜头切换同步给 Service，
+                            // 让 CameraController.setVideoCfg 用正确的 lens key
+                            DroneControlService.updateCurrentLens(lensTypeToCode(lens))
                         }
                     },
                     { e -> Log.e(TAG, "cameraSource 错误: ${e.message}") }
@@ -180,8 +191,7 @@ class MainActivity : AppCompatActivity() {
             .removeAvailableCameraUpdatedListener(availableCameraUpdatedListener)
     }
 
-    // ── HUD 轮询：X / Y / Z 轴速度 ──────────────────────────────────
-    // X = 北向（m/s），Y = 东向（m/s），Z = 垂直（正=上升，m/s）
+    // ── HUD 轮询：N / E / U 三轴速度 (NEU 大地坐标系，非机体系) ───────
     private fun pollVelocity() {
         try {
             KeyManager.getInstance().getValue(
@@ -190,6 +200,7 @@ class MainActivity : AppCompatActivity() {
                     override fun onSuccess(value: Velocity3D?) {
                         value ?: return
                         runOnUiThread {
+                            // value.x = 北向, value.y = 东向, value.z = 垂直 (NEU)
                             xSpeedText.text = "%+.2f m/s".format(value.x)
                             ySpeedText.text = "%+.2f m/s".format(value.y)
                             zSpeedText.text = "%+.2f m/s".format(value.z)
@@ -201,7 +212,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    // ── HUD 轮询：偏航速度（差分 Attitude.yaw，°/s）─────────────────
+    // ── HUD 轮询：偏航速度 (差分 Attitude.yaw, °/s) ──────────────────
     private fun pollYawRate() {
         try {
             KeyManager.getInstance().getValue(
@@ -287,7 +298,12 @@ class MainActivity : AppCompatActivity() {
             CameraKey.KeyCameraVideoStreamSource.create(currentCameraIndex),
             target,
             object : CommonCallbacks.CompletionCallback {
-                override fun onSuccess() { Log.d(TAG, "切换成功 → $target") }
+                override fun onSuccess() {
+                    Log.d(TAG, "切换成功 → $target")
+                    // 同步给 Service (UI → cameraSourceProcessor 也会同步，
+                    // 但流回调有延迟，这里立即更新更稳)
+                    DroneControlService.updateCurrentLens(streamTypeToCode(target))
+                }
                 override fun onFailure(error: IDJIError) {
                     Log.e(TAG, "切换失败: ${error.description()}")
                     runOnUiThread {
@@ -322,5 +338,17 @@ class MainActivity : AppCompatActivity() {
         focalZoomWidget.updateCameraSource(pos, lens)
         photoVideoSwitchWidget.updateCameraSource(pos, lens)
     }
-}
 
+    // ── 镜头类型 ↔ 协议字节 转换 ────────────────────────────────────
+    private fun lensTypeToCode(lens: CameraLensType): Byte = when (lens) {
+        CameraLensType.CAMERA_LENS_ZOOM    -> DroneCommProtocol.CAM_LENS_ZOOM
+        CameraLensType.CAMERA_LENS_THERMAL -> DroneCommProtocol.CAM_LENS_INFRARED
+        else                               -> DroneCommProtocol.CAM_LENS_WIDE
+    }
+
+    private fun streamTypeToCode(t: CameraVideoStreamSourceType): Byte = when (t) {
+        CameraVideoStreamSourceType.ZOOM_CAMERA     -> DroneCommProtocol.CAM_LENS_ZOOM
+        CameraVideoStreamSourceType.INFRARED_CAMERA -> DroneCommProtocol.CAM_LENS_INFRARED
+        else                                        -> DroneCommProtocol.CAM_LENS_WIDE
+    }
+}
