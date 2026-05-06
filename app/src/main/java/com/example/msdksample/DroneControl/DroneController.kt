@@ -4,11 +4,13 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import dji.sdk.keyvalue.key.FlightControllerKey
+import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.value.common.EmptyMsg
 import dji.v5.common.callback.CommonCallbacks
 import dji.v5.common.error.IDJIError
 import dji.v5.et.action
 import dji.v5.et.create
+import dji.v5.manager.KeyManager
 import dji.v5.manager.aircraft.virtualstick.VirtualStickManager
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
@@ -85,6 +87,26 @@ class DroneController {
          *   ROS 话题  1Hz → 不推荐用速度控制，改用航点
          */
         private const val VEL_WATCHDOG_MS = 300L
+
+        // ── 起飞完成判定 ─────────────────────────────────────
+        /** 自动起飞超时上限，超过则放弃等待完成通知 (M3T 正常 4~6s) */
+        private const val TAKEOFF_TIMEOUT_MS = 12_000L
+        /** 起飞轮询周期 */
+        private const val TAKEOFF_POLL_MS = 200L
+        /** 指令接受后延迟多久开始轮询 (等桨加速、离地) */
+        private const val TAKEOFF_POLL_DELAY_MS = 500L
+        /** 认为起飞完成的最小相对高度 (m)。M3T 默认起飞约 1.2 m，取 0.8 留余量 */
+        private const val TAKEOFF_ALT_M = 0.8
+
+        // ── 降落完成判定 ─────────────────────────────────────
+        /** 自动降落超时上限，超过则放弃等待完成通知 */
+        private const val LAND_TIMEOUT_MS = 60_000L
+        /** 降落轮询周期 */
+        private const val LAND_POLL_MS = 300L
+
+        // ── 悬停完成判定 ─────────────────────────────────────
+        /** hover 指令发出后到 VirtualStick disable 回调的兜底延迟 */
+        private const val HOVER_SETTLE_MS = 300L
     }
 
     /** 速度指令快照：四个轴一起原子读写，避免读到混合瞬时值 */
@@ -97,6 +119,12 @@ class DroneController {
 
     private val virtualStickEnabled = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** 起飞进行中标记：起飞未完成前 sendVelocity 会被拒绝，避免和自动起飞冲突 */
+    private val isTakingOff = AtomicBoolean(false)
+
+    /** 降落进行中标记：主要用于 Service 层可选查询，本类内部不强制拦截 */
+    private val isLanding = AtomicBoolean(false)
 
     /** 用 AtomicReference 保证四个分量原子地一起更新 */
     private val cmdRef = AtomicReference(VelCmd())
@@ -121,44 +149,211 @@ class DroneController {
     //  公开 API
     // ─────────────────────────────────────────────────────
 
-    /** 起飞 */
-    fun takeoff(onResult: (Boolean, String) -> Unit) {
+    /**
+     * 起飞（双段回调）
+     *
+     * @param onAccepted 指令被飞控接受时回调 (Boolean, String)；Service 据此回 CMD_ACK。
+     * @param onComplete 飞机真正完成自动起飞、稳定悬停时回调；
+     *                   Service 据此发 CMD_ACK_TAKEOFF_COMPLETE 通知 Jetson。
+     *                   onAccepted=false 时不会被调用。
+     *
+     * 完成判据：KeyIsFlying==true 且 KeyAircraftLocation3D.altitude >= TAKEOFF_ALT_M，
+     *          或超过 TAKEOFF_TIMEOUT_MS 超时。
+     */
+    fun takeoff(
+        onAccepted: (Boolean, String) -> Unit,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
         log("CMD: TAKEOFF")
+        if (!isTakingOff.compareAndSet(false, true)) {
+            log("TAKEOFF 已在进行中，忽略重复指令")
+            onAccepted(false, "takeoff already in progress")
+            return
+        }
+
         FlightControllerKey.KeyStartTakeoff.create().action(
             { _: EmptyMsg ->
-                log("TAKEOFF OK")
-                onResult(true, "OK")
+                log("TAKEOFF 指令已接受，等待飞机真正起飞...")
+                onAccepted(true, "OK")
+                mainHandler.postDelayed({
+                    waitForTakeoffComplete(onComplete)
+                }, TAKEOFF_POLL_DELAY_MS)
             },
             { e: IDJIError ->
+                isTakingOff.set(false)
                 val msg = e.description() ?: e.errorCode()
                 log("TAKEOFF FAIL: $msg")
-                onResult(false, msg)
+                onAccepted(false, msg)
             }
         )
     }
 
-    /** 降落 */
-    fun land(onResult: (Boolean, String) -> Unit) {
+    /**
+     * 降落（双段回调）
+     *
+     * 完成判据：KeyIsFlying==false (电机停转 / 落地)，或超过 LAND_TIMEOUT_MS 超时。
+     */
+    fun land(
+        onAccepted: (Boolean, String) -> Unit,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
         log("CMD: LAND")
         if (virtualStickEnabled.get()) stopVirtualStick()
+        if (!isLanding.compareAndSet(false, true)) {
+            log("LAND 已在进行中，忽略重复指令")
+            onAccepted(false, "land already in progress")
+            return
+        }
+
         FlightControllerKey.KeyStartAutoLanding.create().action(
             { _: EmptyMsg ->
-                log("LAND OK")
-                onResult(true, "OK")
+                log("LAND 指令已接受，等待飞机真正落地...")
+                onAccepted(true, "OK")
+                mainHandler.postDelayed({
+                    waitForLandComplete(onComplete)
+                }, LAND_POLL_MS)
             },
             { e: IDJIError ->
+                isLanding.set(false)
                 val msg = e.description() ?: e.errorCode()
                 log("LAND FAIL: $msg")
-                onResult(false, msg)
+                onAccepted(false, msg)
             }
         )
     }
 
-    /** 悬停：清零速度并停掉 VirtualStick，飞机自动定点 */
-    fun hover(onResult: (Boolean, String) -> Unit) {
+    /**
+     * 悬停（双段回调）
+     *
+     * hover = 清零速度 + disable VirtualStick，飞机进入定点悬停。
+     * 完成判据：VirtualStick disable 回调返回 (成功或失败)，或 HOVER_SETTLE_MS 兜底超时。
+     */
+    fun hover(
+        onAccepted: (Boolean, String) -> Unit,
+        onComplete: (Boolean, String) -> Unit = { _, _ -> }
+    ) {
         log("CMD: HOVER")
-        stopVirtualStick()
-        onResult(true, "OK")
+        val wasEnabled = virtualStickEnabled.get()
+        onAccepted(true, "OK")
+
+        if (!wasEnabled) {
+            // VirtualStick 本来就没开，飞机已处于悬停状态，直接通知完成
+            log("HOVER: VirtualStick 未启用，直接回完成")
+            onComplete(true, "OK")
+            return
+        }
+
+        // 真正 disable VirtualStick：stopVirtualStick 内部异步，等回调或兜底超时
+        stopVirtualStickWithCallback(onComplete)
+    }
+
+    /**
+     * stopVirtualStick 的回调版本：disable 成功/失败均触发 onComplete。
+     * 加一个兜底定时器，防止 SDK 回调丢失时永远收不到完成通知。
+     */
+    private fun stopVirtualStickWithCallback(onComplete: (Boolean, String) -> Unit) {
+        synchronized(feedLock) {
+            feedFuture?.cancel(false)
+            feedFuture = null
+        }
+        cmdRef.set(VelCmd())
+        lastVelCmdTimeMs = 0L
+
+        val fired = AtomicBoolean(false)
+        val fallback = Runnable {
+            if (fired.compareAndSet(false, true)) {
+                log("HOVER: disable 回调超时，兜底回完成")
+                onComplete(true, "OK (fallback)")
+            }
+        }
+        mainHandler.postDelayed(fallback, HOVER_SETTLE_MS * 4)  // 1.2s 兜底
+
+        VirtualStickManager.getInstance().disableVirtualStick(
+            object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    virtualStickEnabled.set(false)
+                    log("VirtualStick DISABLED")
+                    if (fired.compareAndSet(false, true)) {
+                        mainHandler.removeCallbacks(fallback)
+                        onComplete(true, "OK")
+                    }
+                }
+                override fun onFailure(error: IDJIError) {
+                    virtualStickEnabled.set(false)
+                    val msg = error.description() ?: error.errorCode()
+                    log("VirtualStick disable FAIL: $msg")
+                    if (fired.compareAndSet(false, true)) {
+                        mainHandler.removeCallbacks(fallback)
+                        // disable 失败也算完成：状态已在本地置 false，飞机一般已悬停
+                        onComplete(true, "disable fail but local state reset: $msg")
+                    }
+                }
+            }
+        )
+    }
+
+    /**
+     * 起飞完成轮询：isFlying==true && altitude>=阈值 → 成功；超时 → 失败。
+     */
+    private fun waitForTakeoffComplete(onComplete: (Boolean, String) -> Unit) {
+        val deadline = System.currentTimeMillis() + TAKEOFF_TIMEOUT_MS
+
+        val poll = object : Runnable {
+            override fun run() {
+                val km = KeyManager.getInstance()
+                val isFlying = km.getValue(
+                    KeyTools.createKey(FlightControllerKey.KeyIsFlying)
+                ) ?: false
+                val altitude = km.getValue(
+                    KeyTools.createKey(FlightControllerKey.KeyAltitude)
+                ) ?: 0.0
+
+                when {
+                    isFlying && altitude >= TAKEOFF_ALT_M -> {
+                        isTakingOff.set(false)
+                        log("TAKEOFF COMPLETE (alt=${"%.2f".format(altitude)}m)")
+                        onComplete(true, "OK")
+                    }
+                    System.currentTimeMillis() > deadline -> {
+                        isTakingOff.set(false)
+                        log("TAKEOFF TIMEOUT (isFlying=$isFlying alt=$altitude)")
+                        onComplete(false, "takeoff timeout")
+                    }
+                    else -> mainHandler.postDelayed(this, TAKEOFF_POLL_MS)
+                }
+            }
+        }
+        mainHandler.post(poll)
+    }
+
+    /**
+     * 降落完成轮询：isFlying 从 true 变 false 即视为落地完成。
+     */
+    private fun waitForLandComplete(onComplete: (Boolean, String) -> Unit) {
+        val deadline = System.currentTimeMillis() + LAND_TIMEOUT_MS
+
+        val poll = object : Runnable {
+            override fun run() {
+                val isFlying = KeyManager.getInstance().getValue(
+                    KeyTools.createKey(FlightControllerKey.KeyIsFlying)
+                ) ?: false
+
+                when {
+                    !isFlying -> {
+                        isLanding.set(false)
+                        log("LAND COMPLETE")
+                        onComplete(true, "OK")
+                    }
+                    System.currentTimeMillis() > deadline -> {
+                        isLanding.set(false)
+                        log("LAND TIMEOUT (isFlying 仍为 true)")
+                        onComplete(false, "land timeout")
+                    }
+                    else -> mainHandler.postDelayed(this, LAND_POLL_MS)
+                }
+            }
+        }
+        mainHandler.post(poll)
     }
 
     /**
@@ -174,6 +369,20 @@ class DroneController {
         vx: Float, vy: Float, vz: Float, yawRate: Float,
         onResult: (Boolean, String) -> Unit
     ) {
+        // 0. 起飞进行中硬拦截：自动起飞和 VirtualStick 在飞控里互斥，
+        //    起飞未完成就 enable VirtualStick 很可能直接失败，或打断起飞序列。
+        //    Jetson 应订阅 /drone/notify/takeoff_complete 确认起飞完成后再发 VEL。
+        if (isTakingOff.get()) {
+            log("VEL 被拒绝：起飞进行中")
+            onResult(false, "takeoff in progress")
+            return
+        }
+        if (isLanding.get()) {
+            log("VEL 被拒绝：降落进行中")
+            onResult(false, "land in progress")
+            return
+        }
+
         // 1. 把指令写入快照（不论是否已启用，缓存最新值）
         cmdRef.set(
             VelCmd(
@@ -203,6 +412,10 @@ class DroneController {
 
     /** Activity / Service onDestroy 时调用，释放资源 */
     fun release() {
+        // 清掉状态标记，避免 Service 重启后残留导致新 VEL 全被拦截
+        isTakingOff.set(false)
+        isLanding.set(false)
+        mainHandler.removeCallbacksAndMessages(null)
         stopVirtualStick()
         feedExecutor.shutdown()
         try {

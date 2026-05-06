@@ -39,6 +39,14 @@ object DroneCommProtocol {
     // 应答 (Android → Jetson)
     const val CMD_ACK:     Byte           = 0x80.toByte()
 
+    // ── 完成通知 (Android → Jetson，无载荷) ─────────────────
+    //   CMD_ACK (0x80)             表示「指令被接受」，协议层快反馈。
+    //   CMD_ACK_*_COMPLETE (0x8x)  表示「物理动作真正完成」，延后发出，
+    //                              上层可据此决定能否发下一条动作指令。
+    const val CMD_ACK_TAKEOFF_COMPLETE: Byte = 0x81.toByte()
+    const val CMD_ACK_LAND_COMPLETE:    Byte = 0x82.toByte()
+    const val CMD_ACK_HOVER_COMPLETE:   Byte = 0x83.toByte()
+
     // ── ACK 状态码 ────────────────────────────────────────
     const val ACK_OK:      Byte = 0x00
     const val ACK_FAIL:    Byte = 0x01
@@ -176,6 +184,12 @@ object DroneCommProtocol {
         val payload = byteArrayOf(ackedCmd, status)
         return encodeFrame(CMD_ACK, payload)
     }
+
+    /**
+     * 编码无载荷帧 (len=0)。
+     * 用于发送完成通知帧，如 CMD_ACK_TAKEOFF_COMPLETE / _LAND_COMPLETE / _HOVER_COMPLETE。
+     */
+    fun encodeSimple(cmd: Byte): ByteArray = encodeFrame(cmd, ByteArray(0))
 
     private fun encodeFrame(cmd: Byte, payload: ByteArray = ByteArray(0)): ByteArray {
         val len = payload.size

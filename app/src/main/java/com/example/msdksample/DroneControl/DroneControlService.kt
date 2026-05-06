@@ -110,17 +110,40 @@ class DroneControlService : Service() {
         when (frame.cmd) {
 
             // ── 飞控 ────────────────────────────────────────
-            DroneCommProtocol.CMD_TAKEOFF -> droneCtrl.takeoff { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_TAKEOFF, ackOf(ok))
-            }
+            // TAKEOFF/LAND/HOVER 使用双段回调：
+            //   onAccepted → CMD_ACK               (协议层快反馈，指令被接受)
+            //   onComplete → CMD_ACK_*_COMPLETE    (动作真正完成的延后通知)
+            // Jetson 上层需要等到完成通知才能安全地发下一条动作指令 (尤其是 VEL)。
 
-            DroneCommProtocol.CMD_LAND -> droneCtrl.land { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_LAND, ackOf(ok))
-            }
+            DroneCommProtocol.CMD_TAKEOFF -> droneCtrl.takeoff(
+                onAccepted = { ok, _ ->
+                    sendAck(DroneCommProtocol.CMD_TAKEOFF, ackOf(ok))
+                },
+                onComplete = { ok, _ ->
+                    if (ok) sendNotification(DroneCommProtocol.CMD_ACK_TAKEOFF_COMPLETE)
+                    else    Log.w(TAG, "TAKEOFF complete 失败或超时，不发完成通知")
+                }
+            )
 
-            DroneCommProtocol.CMD_HOVER -> droneCtrl.hover { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_HOVER, ackOf(ok))
-            }
+            DroneCommProtocol.CMD_LAND -> droneCtrl.land(
+                onAccepted = { ok, _ ->
+                    sendAck(DroneCommProtocol.CMD_LAND, ackOf(ok))
+                },
+                onComplete = { ok, _ ->
+                    if (ok) sendNotification(DroneCommProtocol.CMD_ACK_LAND_COMPLETE)
+                    else    Log.w(TAG, "LAND complete 失败或超时，不发完成通知")
+                }
+            )
+
+            DroneCommProtocol.CMD_HOVER -> droneCtrl.hover(
+                onAccepted = { ok, _ ->
+                    sendAck(DroneCommProtocol.CMD_HOVER, ackOf(ok))
+                },
+                onComplete = { ok, _ ->
+                    if (ok) sendNotification(DroneCommProtocol.CMD_ACK_HOVER_COMPLETE)
+                    else    Log.w(TAG, "HOVER complete 异常: ok=false")
+                }
+            )
 
             DroneCommProtocol.CMD_VEL -> {
                 val vel = DroneCommProtocol.parseVelPayload(frame.payload) ?: run {
@@ -318,6 +341,35 @@ class DroneControlService : Service() {
                 }
                 override fun onFailure(error: dji.v5.common.error.IDJIError) {
                     Log.w(TAG, "ACK send failed: ${error.description()}")
+                }
+            }
+        )
+    }
+
+    /**
+     * 发送无载荷通知帧 (CMD_ACK_TAKEOFF_COMPLETE / _LAND_COMPLETE / _HOVER_COMPLETE)。
+     *
+     * 与 sendAck 的区别：sendAck 带 [ackedCmd, status] 两字节载荷，
+     * sendNotification 是纯通知帧 (len=0)，表示某个异步动作真正完成。
+     */
+    private fun sendNotification(cmd: Byte) {
+        val mgr = try {
+            PayloadCenter.getInstance().payloadManager[payloadIndex]
+        } catch (e: Throwable) {
+            Log.w(TAG, "NOTIFY send: payloadManager 访问异常: ${e.message}")
+            return
+        } ?: run {
+            Log.w(TAG, "NOTIFY send: payloadManager 为空，通知丢弃 cmd=0x${cmd.toUByte().toString(16)}")
+            return
+        }
+        mgr.sendDataToPayload(
+            DroneCommProtocol.encodeSimple(cmd),
+            object : dji.v5.common.callback.CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    Log.i(TAG, "NOTIFY sent: cmd=0x${cmd.toUByte().toString(16)}")
+                }
+                override fun onFailure(error: dji.v5.common.error.IDJIError) {
+                    Log.w(TAG, "NOTIFY send failed: ${error.description()}")
                 }
             }
         )
