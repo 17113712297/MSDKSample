@@ -58,6 +58,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLensZoom: Button
     private lateinit var btnLensThermal: Button
 
+    // 航点记录按钮
+    private lateinit var btnRecordWaypoint: Button
+    private lateinit var btnSaveWaypoints: Button
+    private lateinit var btnClearWaypoints: Button
+
     // ── 左侧 HUD TextView ────────────────────────────────────────────
     // 注：以下三个轴显示的是 DJI KeyAircraftVelocity 的字段值，
     //     该值采用 NEU (North-East-Up) 大地坐标系，与机体系不同：
@@ -84,6 +89,7 @@ class MainActivity : AppCompatActivity() {
     // ── 偏航速度计算状态 ─────────────────────────────────────────────
     private var lastYawDeg    = Double.NaN
     private var lastYawTimeMs = 0L
+    private val waypointCtrl = WaypointController()
 
     // ── 轮询 Handler ─────────────────────────────────────────────────
     private val pollHandler  = Handler(Looper.getMainLooper())
@@ -127,6 +133,10 @@ class MainActivity : AppCompatActivity() {
         btnLensZoom    = findViewById(R.id.btnLensZoom)
         btnLensThermal = findViewById(R.id.btnLensThermal)
 
+        btnRecordWaypoint = findViewById(R.id.btnRecordWaypoint)
+        btnSaveWaypoints  = findViewById(R.id.btnSaveWaypoints)
+        btnClearWaypoints = findViewById(R.id.btnClearWaypoints)
+
         xSpeedText        = findViewById(R.id.xSpeedText)
         ySpeedText        = findViewById(R.id.ySpeedText)
         zSpeedText        = findViewById(R.id.zSpeedText)
@@ -148,6 +158,7 @@ class MainActivity : AppCompatActivity() {
             .addAvailableCameraUpdatedListener(availableCameraUpdatedListener)
 
         setupLensButtons()
+        setupWaypointButtons()
 
         window.decorView.postDelayed({ reattachStatusWidgets() }, REATTACH_DELAY)
         startForegroundService(Intent(this, DroneControlService::class.java))
@@ -290,6 +301,12 @@ class MainActivity : AppCompatActivity() {
         btnLensWide.setOnClickListener    { switchLens(CameraVideoStreamSourceType.WIDE_CAMERA) }
         btnLensZoom.setOnClickListener    { switchLens(CameraVideoStreamSourceType.ZOOM_CAMERA) }
         btnLensThermal.setOnClickListener { switchLens(CameraVideoStreamSourceType.INFRARED_CAMERA) }
+    }
+
+    private fun setupWaypointButtons() {
+        btnRecordWaypoint.setOnClickListener { waypointCtrl.recordWaypoint() }
+        btnSaveWaypoints.setOnClickListener  { waypointCtrl.saveWaypoints() }
+        btnClearWaypoints.setOnClickListener { waypointCtrl.clearWaypoints() }
     }
 
     private fun switchLens(target: CameraVideoStreamSourceType) {
