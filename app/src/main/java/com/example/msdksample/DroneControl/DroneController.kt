@@ -165,6 +165,16 @@ class DroneController {
         onComplete: (Boolean, String) -> Unit = { _, _ -> }
     ) {
         log("CMD: TAKEOFF")
+
+        // 重置 VirtualStick 状态：上一次降落后 DJI 固件可能已自动禁用
+        // VirtualStick，但本地标志 virtualStickEnabled 仍为 true（过时）。
+        // 不重置会导致第二次起飞后 sendVelocity 跳过 enableVirtualStick()，
+        // 速度指令被固件静默丢弃，航点跟踪失效。
+        if (virtualStickEnabled.get()) {
+            log("TAKEOFF: 重置过时的 VirtualStick 状态")
+            stopVirtualStick()
+        }
+
         if (!isTakingOff.compareAndSet(false, true)) {
             log("TAKEOFF 已在进行中，忽略重复指令")
             onAccepted(false, "takeoff already in progress")
@@ -458,16 +468,13 @@ class DroneController {
         // 重置看门狗：下次 sendVelocity 前不应触发 watchdog
         lastVelCmdTimeMs = 0L
 
-        if (virtualStickEnabled.get()) {
+        if (virtualStickEnabled.getAndSet(false)) {
             VirtualStickManager.getInstance().disableVirtualStick(
                 object : CommonCallbacks.CompletionCallback {
                     override fun onSuccess() {
-                        virtualStickEnabled.set(false)
                         log("VirtualStick DISABLED")
                     }
                     override fun onFailure(error: IDJIError) {
-                        // 即使 SDK 回失败，也将本地状态置 false，避免一直卡在 enabled
-                        virtualStickEnabled.set(false)
                         log("VirtualStick disable FAIL: ${error.description()}")
                     }
                 }
