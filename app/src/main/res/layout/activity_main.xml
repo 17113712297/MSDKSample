@@ -255,6 +255,53 @@
 
     </LinearLayout>
 
+    <!-- ══════════════ 航点记录按钮组（镜头按钮下方）══════════════ -->
+    <LinearLayout
+        android:id="@+id/waypointControlLayout"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentEnd="true"
+        android:layout_below="@id/lensControlLayout"
+        android:layout_marginEnd="16dp"
+        android:layout_marginTop="8dp"
+        android:background="#AA000000"
+        android:orientation="vertical"
+        android:padding="4dp">
+
+        <Button
+            android:id="@+id/btnRecordWaypoint"
+            android:layout_width="72dp"
+            android:layout_height="40dp"
+            android:backgroundTint="#555555"
+            android:padding="0dp"
+            android:text="记录航点"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnSaveWaypoints"
+            android:layout_width="72dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="4dp"
+            android:backgroundTint="#555555"
+            android:padding="0dp"
+            android:text="保存航线"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnClearWaypoints"
+            android:layout_width="72dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="4dp"
+            android:backgroundTint="#555555"
+            android:padding="0dp"
+            android:text="清除航点"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+    </LinearLayout>
+
     <!-- ══════════════ 右下角拍照录像控件 ══════════════ -->
     <dji.v5.ux.cameracore.widget.cameracontrols.photovideoswitch.PhotoVideoSwitchWidget
         android:id="@+id/photoVideoSwitchWidget"

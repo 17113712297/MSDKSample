@@ -36,6 +36,10 @@ object DroneCommProtocol {
     const val CMD_CAM_ZOOM:      Byte     = 0x25
     // 配件 (Jetson → Android)
     const val CMD_AUX_LIGHT: Byte         = 0x31
+    // 航点 (Android → Jetson，无载荷)
+    const val CMD_RECORD_WAYPOINT: Byte  = 0x41
+    const val CMD_SAVE_WAYPOINTS:  Byte  = 0x42
+    const val CMD_CLEAR_WAYPOINTS: Byte  = 0x43
     // 应答 (Android → Jetson)
     const val CMD_ACK:     Byte           = 0x80.toByte()
 
