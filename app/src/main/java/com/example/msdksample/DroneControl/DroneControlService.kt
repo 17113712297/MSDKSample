@@ -48,12 +48,39 @@ class DroneControlService : Service() {
         fun updateCurrentLens(lensCode: Byte) {
             currentLensCode = lensCode
         }
+
+        /**
+         * 发送编码帧到 Jetson（供 WaypointController 等外部调用）。
+         * fire-and-forget：ACK 结果通过 payloadDataListener → dispatchFrame 中的 Toast 反馈。
+         */
+        fun sendFrame(data: ByteArray) {
+            val mgr = try {
+                PayloadCenter.getInstance().payloadManager[PayloadIndexType.UP]
+            } catch (e: Throwable) {
+                Log.w(TAG, "sendFrame: payloadManager 访问异常: ${e.message}")
+                return
+            } ?: run {
+                Log.w(TAG, "sendFrame: payloadManager 为空")
+                return
+            }
+            mgr.sendDataToPayload(data,
+                object : dji.v5.common.callback.CommonCallbacks.CompletionCallback {
+                    override fun onSuccess() {
+                        Log.i(TAG, "Frame sent (${data.size}B)")
+                    }
+                    override fun onFailure(error: dji.v5.common.error.IDJIError) {
+                        Log.w(TAG, "Frame send failed: ${error.description()}")
+                    }
+                }
+            )
+        }
     }
 
     private val droneCtrl    = DroneController()
     private val gimbalCtrl   = GimbalController()
     private val cameraCtrl   = CameraController()
     private val auxLightCtrl = AuxLightController()
+    private val waypointCtrl = WaypointController()
     private val payloadIndex = PayloadIndexType.UP
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -264,6 +291,26 @@ class DroneControlService : Service() {
                 Log.i(TAG, "AUX_LIGHT $modeStr")
                 auxLightCtrl.setBottomAuxLight(p.mode) { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_AUX_LIGHT, ackOf(ok))
+                }
+            }
+
+            // ── 航点指令 ACK (Jetson 对 Android 主动指令的应答) ──
+            DroneCommProtocol.CMD_RECORD_WAYPOINT,
+            DroneCommProtocol.CMD_SAVE_WAYPOINTS,
+            DroneCommProtocol.CMD_CLEAR_WAYPOINTS -> {
+                val ok = frame.payload.size >= 2 && frame.payload[1] == DroneCommProtocol.ACK_OK
+                val cmdName = when (frame.cmd) {
+                    DroneCommProtocol.CMD_RECORD_WAYPOINT -> "记录航点"
+                    DroneCommProtocol.CMD_SAVE_WAYPOINTS  -> "保存航线"
+                    DroneCommProtocol.CMD_CLEAR_WAYPOINTS -> "清除航点"
+                    else -> "未知"
+                }
+                val resultMsg = if (ok) "$cmdName 成功" else "$cmdName 失败"
+                Log.i(TAG, "WAYPOINT ACK: $resultMsg")
+                mainHandler.post {
+                    android.widget.Toast.makeText(
+                        this, resultMsg, android.widget.Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
 
