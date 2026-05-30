@@ -1,6 +1,3 @@
 # Project exclude paths
-/.gradle/
 /android-sdk-v5-uxsdk/build/
-/android-sdk-v5-uxsdk/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/
 /app/build/
-/build/
