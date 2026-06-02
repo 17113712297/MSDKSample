@@ -48,12 +48,39 @@ class DroneControlService : Service() {
         fun updateCurrentLens(lensCode: Byte) {
             currentLensCode = lensCode
         }
+
+        /**
+         * 发送编码帧到 Jetson（供 WaypointController 等外部调用）。
+         * fire-and-forget：ACK 结果通过 payloadDataListener → dispatchFrame 中的 Toast 反馈。
+         */
+        fun sendFrame(data: ByteArray) {
+            val mgr = try {
+                PayloadCenter.getInstance().payloadManager[PayloadIndexType.UP]
+            } catch (e: Throwable) {
+                Log.w(TAG, "sendFrame: payloadManager 访问异常: ${e.message}")
+                return
+            } ?: run {
+                Log.w(TAG, "sendFrame: payloadManager 为空")
+                return
+            }
+            mgr.sendDataToPayload(data,
+                object : dji.v5.common.callback.CommonCallbacks.CompletionCallback {
+                    override fun onSuccess() {
+                        Log.i(TAG, "Frame sent (${data.size}B)")
+                    }
+                    override fun onFailure(error: dji.v5.common.error.IDJIError) {
+                        Log.w(TAG, "Frame send failed: ${error.description()}")
+                    }
+                }
+            )
+        }
     }
 
     private val droneCtrl    = DroneController()
     private val gimbalCtrl   = GimbalController()
     private val cameraCtrl   = CameraController()
     private val auxLightCtrl = AuxLightController()
+    private val waypointCtrl = WaypointController()
     private val payloadIndex = PayloadIndexType.UP
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -110,17 +137,40 @@ class DroneControlService : Service() {
         when (frame.cmd) {
 
             // ── 飞控 ────────────────────────────────────────
-            DroneCommProtocol.CMD_TAKEOFF -> droneCtrl.takeoff { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_TAKEOFF, ackOf(ok))
-            }
+            // TAKEOFF/LAND/HOVER 使用双段回调：
+            //   onAccepted → CMD_ACK               (协议层快反馈，指令被接受)
+            //   onComplete → CMD_ACK_*_COMPLETE    (动作真正完成的延后通知)
+            // Jetson 上层需要等到完成通知才能安全地发下一条动作指令 (尤其是 VEL)。
 
-            DroneCommProtocol.CMD_LAND -> droneCtrl.land { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_LAND, ackOf(ok))
-            }
+            DroneCommProtocol.CMD_TAKEOFF -> droneCtrl.takeoff(
+                onAccepted = { ok, _ ->
+                    sendAck(DroneCommProtocol.CMD_TAKEOFF, ackOf(ok))
+                },
+                onComplete = { ok, _ ->
+                    if (ok) sendNotification(DroneCommProtocol.CMD_ACK_TAKEOFF_COMPLETE)
+                    else    Log.w(TAG, "TAKEOFF complete 失败或超时，不发完成通知")
+                }
+            )
 
-            DroneCommProtocol.CMD_HOVER -> droneCtrl.hover { ok, _ ->
-                sendAck(DroneCommProtocol.CMD_HOVER, ackOf(ok))
-            }
+            DroneCommProtocol.CMD_LAND -> droneCtrl.land(
+                onAccepted = { ok, _ ->
+                    sendAck(DroneCommProtocol.CMD_LAND, ackOf(ok))
+                },
+                onComplete = { ok, _ ->
+                    if (ok) sendNotification(DroneCommProtocol.CMD_ACK_LAND_COMPLETE)
+                    else    Log.w(TAG, "LAND complete 失败或超时，不发完成通知")
+                }
+            )
+
+            DroneCommProtocol.CMD_HOVER -> droneCtrl.hover(
+                onAccepted = { ok, _ ->
+                    sendAck(DroneCommProtocol.CMD_HOVER, ackOf(ok))
+                },
+                onComplete = { ok, _ ->
+                    if (ok) sendNotification(DroneCommProtocol.CMD_ACK_HOVER_COMPLETE)
+                    else    Log.w(TAG, "HOVER complete 异常: ok=false")
+                }
+            )
 
             DroneCommProtocol.CMD_VEL -> {
                 val vel = DroneCommProtocol.parseVelPayload(frame.payload) ?: run {
@@ -244,6 +294,26 @@ class DroneControlService : Service() {
                 }
             }
 
+            // ── 航点指令 ACK (Jetson 对 Android 主动指令的应答) ──
+            DroneCommProtocol.CMD_RECORD_WAYPOINT,
+            DroneCommProtocol.CMD_SAVE_WAYPOINTS,
+            DroneCommProtocol.CMD_CLEAR_WAYPOINTS -> {
+                val ok = frame.payload.size >= 2 && frame.payload[1] == DroneCommProtocol.ACK_OK
+                val cmdName = when (frame.cmd) {
+                    DroneCommProtocol.CMD_RECORD_WAYPOINT -> "记录航点"
+                    DroneCommProtocol.CMD_SAVE_WAYPOINTS  -> "保存航线"
+                    DroneCommProtocol.CMD_CLEAR_WAYPOINTS -> "清除航点"
+                    else -> "未知"
+                }
+                val resultMsg = if (ok) "$cmdName 成功" else "$cmdName 失败"
+                Log.i(TAG, "WAYPOINT ACK: $resultMsg")
+                mainHandler.post {
+                    android.widget.Toast.makeText(
+                        this, resultMsg, android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+
             else -> Log.w(TAG, "未知 CMD=0x${frame.cmd.toUByte().toString(16)}")
         }
     }
@@ -318,6 +388,35 @@ class DroneControlService : Service() {
                 }
                 override fun onFailure(error: dji.v5.common.error.IDJIError) {
                     Log.w(TAG, "ACK send failed: ${error.description()}")
+                }
+            }
+        )
+    }
+
+    /**
+     * 发送无载荷通知帧 (CMD_ACK_TAKEOFF_COMPLETE / _LAND_COMPLETE / _HOVER_COMPLETE)。
+     *
+     * 与 sendAck 的区别：sendAck 带 [ackedCmd, status] 两字节载荷，
+     * sendNotification 是纯通知帧 (len=0)，表示某个异步动作真正完成。
+     */
+    private fun sendNotification(cmd: Byte) {
+        val mgr = try {
+            PayloadCenter.getInstance().payloadManager[payloadIndex]
+        } catch (e: Throwable) {
+            Log.w(TAG, "NOTIFY send: payloadManager 访问异常: ${e.message}")
+            return
+        } ?: run {
+            Log.w(TAG, "NOTIFY send: payloadManager 为空，通知丢弃 cmd=0x${cmd.toUByte().toString(16)}")
+            return
+        }
+        mgr.sendDataToPayload(
+            DroneCommProtocol.encodeSimple(cmd),
+            object : dji.v5.common.callback.CommonCallbacks.CompletionCallback {
+                override fun onSuccess() {
+                    Log.i(TAG, "NOTIFY sent: cmd=0x${cmd.toUByte().toString(16)}")
+                }
+                override fun onFailure(error: dji.v5.common.error.IDJIError) {
+                    Log.w(TAG, "NOTIFY send failed: ${error.description()}")
                 }
             }
         )
