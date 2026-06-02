@@ -5,13 +5,11 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
-    <!-- FPV 实时画面，全屏铺底 -->
     <dji.v5.ux.core.widget.fpv.FPVWidget
         android:id="@+id/fpvWidget"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- ══════════════ 顶部状态栏 ══════════════ -->
     <LinearLayout
         android:id="@+id/topBarLayout"
         android:layout_width="match_parent"
@@ -59,10 +57,8 @@
             android:layout_height="30dp"
             android:layout_marginStart="8dp" />
 
-
     </LinearLayout>
 
-    <!-- ══════════════ 左侧飞行数据 HUD ══════════════ -->
     <LinearLayout
         android:id="@+id/hudLayout"
         android:layout_width="wrap_content"
@@ -73,149 +69,175 @@
         android:background="#BB000000"
         android:orientation="vertical"
         android:paddingStart="10dp"
-        android:paddingEnd="12dp"
         android:paddingTop="8dp"
+        android:paddingEnd="12dp"
         android:paddingBottom="8dp">
 
-        <!-- X 轴速度（北向） -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
             <TextView
                 android:layout_width="72dp"
                 android:layout_height="wrap_content"
                 android:text="X轴速度"
                 android:textColor="#AAFFFFFF"
                 android:textSize="13sp" />
+
             <TextView
                 android:id="@+id/xSpeedText"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:gravity="end"
                 android:text="-- m/s"
                 android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:fontFamily="monospace"
-                android:gravity="end" />
+                android:textSize="14sp" />
         </LinearLayout>
 
-        <!-- Y 轴速度（东向） -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginTop="5dp"
             android:gravity="center_vertical"
-            android:layout_marginTop="5dp">
+            android:orientation="horizontal">
+
             <TextView
                 android:layout_width="72dp"
                 android:layout_height="wrap_content"
                 android:text="Y轴速度"
                 android:textColor="#AAFFFFFF"
                 android:textSize="13sp" />
+
             <TextView
                 android:id="@+id/ySpeedText"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:gravity="end"
                 android:text="-- m/s"
                 android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:fontFamily="monospace"
-                android:gravity="end" />
+                android:textSize="14sp" />
         </LinearLayout>
 
-        <!-- Z 轴速度（垂直，正=上升） -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginTop="5dp"
             android:gravity="center_vertical"
-            android:layout_marginTop="5dp">
+            android:orientation="horizontal">
+
             <TextView
                 android:layout_width="72dp"
                 android:layout_height="wrap_content"
                 android:text="Z轴速度"
                 android:textColor="#AAFFFFFF"
                 android:textSize="13sp" />
+
             <TextView
                 android:id="@+id/zSpeedText"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:gravity="end"
                 android:text="-- m/s"
                 android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:fontFamily="monospace"
-                android:gravity="end" />
+                android:textSize="14sp" />
         </LinearLayout>
 
-        <!-- 偏航速度（°/s，差分计算） -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginTop="5dp"
             android:gravity="center_vertical"
-            android:layout_marginTop="5dp">
+            android:orientation="horizontal">
+
             <TextView
                 android:layout_width="72dp"
                 android:layout_height="wrap_content"
                 android:text="偏航速度"
                 android:textColor="#AAFFFFFF"
                 android:textSize="13sp" />
+
             <TextView
                 android:id="@+id/yawRateText"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:gravity="end"
                 android:text="-- °/s"
                 android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:fontFamily="monospace"
-                android:gravity="end" />
+                android:textSize="14sp" />
         </LinearLayout>
 
-        <!-- 剩余时间（飞行中才有值） -->
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:layout_marginTop="5dp"
             android:gravity="center_vertical"
-            android:layout_marginTop="5dp">
+            android:orientation="horizontal">
+
             <TextView
                 android:layout_width="72dp"
                 android:layout_height="wrap_content"
                 android:text="剩余时间"
                 android:textColor="#AAFFFFFF"
                 android:textSize="13sp" />
+
             <TextView
                 android:id="@+id/remainingTimeText"
                 android:layout_width="80dp"
                 android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:gravity="end"
                 android:text="--:--"
                 android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:fontFamily="monospace"
-                android:gravity="end" />
+                android:textSize="14sp" />
         </LinearLayout>
 
     </LinearLayout>
 
-    <!-- ══════════════ 变焦滑块（镜头按钮左边）══════════════ -->
-    <dji.v5.ux.visualcamera.zoom.FocalZoomWidget
-        android:id="@+id/focalZoomWidget"
-        android:layout_width="40dp"
-        android:layout_height="200dp"
-        android:layout_alignParentEnd="true"
-        android:layout_centerVertical="true"
-        android:layout_marginEnd="80dp"
-        android:visibility="gone" />
+    <LinearLayout
+        android:id="@+id/bottomActionLayout"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentStart="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginStart="24dp"
+        android:layout_marginBottom="24dp"
+        android:orientation="horizontal">
 
-    <!-- ══════════════ 镜头切换按钮组（最右侧）══════════════ -->
+        <Button
+            android:id="@+id/btnAutoLanding"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:backgroundTint="#D32F2F"
+            android:text="视觉降落"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnTakeoff"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:backgroundTint="#1976D2"
+            android:text="起飞前检查"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
     <LinearLayout
         android:id="@+id/lensControlLayout"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentEnd="true"
         android:layout_alignParentTop="true"
-        android:layout_marginTop="70dp"
+        android:layout_alignParentEnd="true"
+        android:layout_marginTop="60dp"
         android:layout_marginEnd="16dp"
         android:background="#AA000000"
         android:orientation="vertical"
@@ -255,15 +277,14 @@
 
     </LinearLayout>
 
-    <!-- ══════════════ 航点记录按钮组（镜头按钮下方）══════════════ -->
     <LinearLayout
         android:id="@+id/waypointControlLayout"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentEnd="true"
         android:layout_below="@id/lensControlLayout"
-        android:layout_marginEnd="16dp"
+        android:layout_alignParentEnd="true"
         android:layout_marginTop="8dp"
+        android:layout_marginEnd="16dp"
         android:background="#AA000000"
         android:orientation="vertical"
         android:padding="4dp">
@@ -302,24 +323,14 @@
 
     </LinearLayout>
 
-    <!-- ══════════════ 右下角拍照录像控件 ══════════════ -->
-    <dji.v5.ux.cameracore.widget.cameracontrols.photovideoswitch.PhotoVideoSwitchWidget
-        android:id="@+id/photoVideoSwitchWidget"
+    <dji.v5.ux.visualcamera.zoom.FocalZoomWidget
+        android:id="@+id/focalZoomWidget"
         android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentBottom="true"
-        android:layout_marginEnd="16dp"
-        android:layout_marginBottom="144dp" />
-
-    <dji.v5.ux.cameracore.widget.cameracapture.recordvideo.RecordVideoWidget
-        android:id="@+id/recordVideoWidget"
-        android:layout_width="50dp"
-        android:layout_height="50dp"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentBottom="true"
-        android:layout_marginEnd="16dp"
-        android:layout_marginBottom="80dp" />
+        android:layout_height="200dp"
+        android:layout_centerVertical="true"
+        android:layout_marginEnd="24dp"
+        android:layout_toStartOf="@id/lensControlLayout"
+        android:visibility="gone" />
 
     <dji.v5.ux.cameracore.widget.cameracapture.shootphoto.ShootPhotoWidget
         android:id="@+id/shootPhotoWidget"
@@ -328,6 +339,24 @@
         android:layout_alignParentEnd="true"
         android:layout_alignParentBottom="true"
         android:layout_marginEnd="16dp"
-        android:layout_marginBottom="16dp" />
-</RelativeLayout>
+        android:layout_marginBottom="24dp" />
 
+    <dji.v5.ux.cameracore.widget.cameracapture.recordvideo.RecordVideoWidget
+        android:id="@+id/recordVideoWidget"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
+        android:layout_above="@id/shootPhotoWidget"
+        android:layout_alignParentEnd="true"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="16dp" />
+
+    <dji.v5.ux.cameracore.widget.cameracontrols.photovideoswitch.PhotoVideoSwitchWidget
+        android:id="@+id/photoVideoSwitchWidget"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_above="@id/recordVideoWidget"
+        android:layout_alignParentEnd="true"
+        android:layout_marginEnd="21dp"
+        android:layout_marginBottom="16dp" />
+
+</RelativeLayout>

@@ -1,0 +1,122 @@
+// This file is part of OpenCV project.
+// It is subject to the license terms in the LICENSE file found in the top-level directory
+// of this distribution and at http://opencv.org/license.html.
+
+apply plugin: 'com.android.library'
+apply plugin: 'maven-publish'
+try {
+    apply plugin: 'kotlin-android'
+    println "Configure OpenCV with Kotlin"
+} catch (Exception e) {
+    println "Configure OpenCV without Kotlin"
+}
+
+def openCVersionName = "4.12.0"
+def openCVersionCode = ((4 * 100 + 12) * 100 + 0) * 10 + 0
+
+println "OpenCV: " + openCVersionName + " " + project.buildscript.sourceFile
+
+android {
+    namespace 'org.opencv'
+    // 统一使用新版语法 compileSdk，与主 app 保持一致
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 21
+        targetSdk 34
+
+        versionCode openCVersionCode
+        versionName openCVersionName
+
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_shared"
+                targets "opencv_jni_shared"
+            }
+        }
+    }
+
+    // 👑 关键修改 1：对齐主 App 的 Java 8 版本
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    // 👑 关键修改 2：补充 Kotlin 版本声明并对齐主 App 的 1.8，彻底解决之前的报错
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    buildTypes {
+        debug {
+            packagingOptions {
+                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            }
+        }
+        release {
+            packagingOptions {
+                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['native/libs']
+            java.srcDirs = ['java/src']
+            res.srcDirs = ['java/res']
+            manifest.srcFile 'java/AndroidManifest.xml'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path (project.projectDir.toString() + '/libcxx_helper/CMakeLists.txt')
+        }
+    }
+
+    // 👑 关键修改 3：移除了之前错误嵌套的 android 闭包，将 buildConfig 统一放在这里
+    buildFeatures {
+        prefabPublishing true
+        buildConfig true
+    }
+
+    prefab {
+        opencv_jni_shared {
+            headers 'native/jni/include'
+        }
+    }
+
+    publishing {
+        singleVariant('release') {
+            withSourcesJar()
+            withJavadocJar()
+        }
+    }
+}
+
+publishing {
+    publications {
+        release(MavenPublication) {
+            groupId = 'org.opencv'
+            artifactId = 'opencv'
+            version = '4.12.0'
+
+            afterEvaluate {
+                from components.release
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'myrepo'
+            url = "${project.buildDir}/repo"
+        }
+    }
+}
+
+dependencies {
+    // 空
+}

@@ -1,7 +1,6 @@
 package com.example.msdksample
 
 import android.content.Intent
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +10,8 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.key.KeyTools
@@ -22,7 +23,6 @@ import dji.sdk.keyvalue.value.common.Velocity3D
 import dji.sdk.keyvalue.value.flightcontroller.LowBatteryRTHInfo
 import dji.v5.common.callback.CommonCallbacks
 import dji.v5.common.error.IDJIError
-import dji.v5.et.create
 import dji.v5.manager.KeyManager
 import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.interfaces.ICameraStreamManager
@@ -35,6 +35,7 @@ import dji.v5.ux.core.widget.fpv.FPVWidget
 import dji.v5.ux.visualcamera.zoom.FocalZoomWidget
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
 import io.reactivex.rxjava3.disposables.CompositeDisposable
+import org.opencv.android.OpenCVLoader
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -58,40 +59,42 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLensZoom: Button
     private lateinit var btnLensThermal: Button
 
-    // 航点记录按钮
+    // 航点记录按钮 (保留原有功能)
     private lateinit var btnRecordWaypoint: Button
     private lateinit var btnSaveWaypoints: Button
     private lateinit var btnClearWaypoints: Button
 
+    // 新增：视觉/预检按钮 (来自代码段2)
+    private var btnAutoLanding: Button? = null
+    private var btnTakeoff: Button? = null
+
     // ── 左侧 HUD TextView ────────────────────────────────────────────
-    // 注：以下三个轴显示的是 DJI KeyAircraftVelocity 的字段值，
-    //     该值采用 NEU (North-East-Up) 大地坐标系，与机体系不同：
-    //       value.x = 北向速度 m/s   (正 = 向北)
-    //       value.y = 东向速度 m/s   (正 = 向东)
-    //       value.z = 垂直速度 m/s   (正 = 向上)
-    //     与 PSDK 协议里 VelPayload 的机体系 (前/右/上) 含义不同，
-    //     这里只用于显示当前实测速度，不能直接用作机体速度回放。
     private lateinit var xSpeedText: TextView
     private lateinit var ySpeedText: TextView
     private lateinit var zSpeedText: TextView
     private lateinit var yawRateText: TextView
     private lateinit var remainingTimeText: TextView
 
-    // ── 当前激活的相机位置 ───────────────────────────────────────────
+    // ── 状态管理 ───────────────────────────────────────────
     private var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 
-    // ── RxJava 相机源处理器 ──────────────────────────────────────────
     private val cameraSourceProcessor = DataProcessor.create(
         Pair(ComponentIndexType.UNKNOWN, CameraLensType.UNKNOWN)
     )
     private var compositeDisposable: CompositeDisposable? = null
 
-    // ── 偏航速度计算状态 ─────────────────────────────────────────────
     private var lastYawDeg    = Double.NaN
     private var lastYawTimeMs = 0L
     private val waypointCtrl = WaypointController()
 
-    // ── 轮询 Handler ─────────────────────────────────────────────────
+    // ── 新增：核心视觉与控制组件 ─────────────────────────────────────────
+    private var testCameraController: CameraController? = null
+    private var visionController: VisionController? = null
+    private lateinit var landingController: LandingController
+    private lateinit var preflightController: PreflightController
+    @Volatile private var currentTargetId = -1
+
+    // ── 轮询 Handler (保留原有功能) ─────────────────────────────────────────────────
     private val pollHandler  = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
         override fun run() {
@@ -102,7 +105,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── 相机流可用性监听器 ────────────────────────────────────────────
+    // ── 相机流可用性监听器 (合并两者逻辑) ────────────────────────────────────────────
     private val availableCameraUpdatedListener =
         object : ICameraStreamManager.AvailableCameraUpdatedListener {
             override fun onAvailableCameraUpdated(list: MutableList<ComponentIndexType>) {
@@ -111,8 +114,17 @@ class MainActivity : AppCompatActivity() {
                     if (list.isNullOrEmpty()) return@runOnUiThread
                     val source = if (list.contains(ComponentIndexType.LEFT_OR_MAIN))
                         ComponentIndexType.LEFT_OR_MAIN else list[0]
+
                     currentCameraIndex = source
                     fpvWidget.updateVideoSource(source)
+
+                    // ★ 将源同步给新加入的控制器
+                    if (::landingController.isInitialized) {
+                        landingController.currentCameraIndex = source
+                    }
+                    if (::preflightController.isInitialized) {
+                        preflightController.currentCameraIndex = source
+                    }
                 }
             }
             override fun onCameraStreamEnableUpdate(map: MutableMap<ComponentIndexType, Boolean>) {}
@@ -121,28 +133,29 @@ class MainActivity : AppCompatActivity() {
     // ── 生命周期 ──────────────────────────────────────────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 1. 初始化 OpenCV
+        Thread {
+            val ok = OpenCVLoader.initDebug()
+            Log.i(TAG, "OpenCV init: $ok")
+        }.start()
+
         setContentView(R.layout.activity_main)
 
-        fpvWidget              = findViewById(R.id.fpvWidget)
-        shootPhotoWidget       = findViewById(R.id.shootPhotoWidget)
-        recordVideoWidget      = findViewById(R.id.recordVideoWidget)
-        focalZoomWidget        = findViewById(R.id.focalZoomWidget)
-        photoVideoSwitchWidget = findViewById(R.id.photoVideoSwitchWidget)
+        // 2. 绑定已有与新增的 UI 组件
+        initUIWidgets()
 
-        btnLensWide    = findViewById(R.id.btnLensWide)
-        btnLensZoom    = findViewById(R.id.btnLensZoom)
-        btnLensThermal = findViewById(R.id.btnLensThermal)
+        // 3. ★ 初始化新增的控制器（带安全保护）
+        try {
+            landingController = LandingController()
+            preflightController = PreflightController()
+            setupControllerCallbacks()
+        } catch (e: Exception) {
+            Log.e(TAG, "⚠️ 控制器初始化失败 (SDK可能未就绪或未连接飞机)", e)
+            showErrorOnUI("控制器初始化失败，请确保飞机已连接！")
+        }
 
-        btnRecordWaypoint = findViewById(R.id.btnRecordWaypoint)
-        btnSaveWaypoints  = findViewById(R.id.btnSaveWaypoints)
-        btnClearWaypoints = findViewById(R.id.btnClearWaypoints)
-
-        xSpeedText        = findViewById(R.id.xSpeedText)
-        ySpeedText        = findViewById(R.id.ySpeedText)
-        zSpeedText        = findViewById(R.id.zSpeedText)
-        yawRateText       = findViewById(R.id.yawRateText)
-        remainingTimeText = findViewById(R.id.remainingTimeText)
-
+        // 4. 设置相机数据流监听
         fpvWidget.isCameraSourceNameVisible = false
         fpvWidget.isCameraSourceSideVisible = false
 
@@ -157,11 +170,19 @@ class MainActivity : AppCompatActivity() {
             .getCameraStreamManager()
             .addAvailableCameraUpdatedListener(availableCameraUpdatedListener)
 
+        // 5. 设置各种按钮点击事件
         setupLensButtons()
         setupWaypointButtons()
 
+        // 新增的视觉降落与起飞检查点击事件
+        btnAutoLanding?.setOnClickListener { onLandingClicked() }
+        btnTakeoff?.setOnClickListener { onTakeoffClicked() }
+
+        // 6. 挂载系统状态Widget并启动服务
         window.decorView.postDelayed({ reattachStatusWidgets() }, REATTACH_DELAY)
-        startForegroundService(Intent(this, DroneControlService::class.java))
+        runCatching {
+            ContextCompat.startForegroundService(this, Intent(this, DroneControlService::class.java))
+        }
     }
 
     override fun onResume() {
@@ -177,14 +198,14 @@ class MainActivity : AppCompatActivity() {
                             updateViewVisibility(lens)
                             updateAllWidgetSource(pos, lens)
                             updateLensButtonState(lens)
-                            // 修复：把 UI 端镜头切换同步给 Service，
-                            // 让 CameraController.setVideoCfg 用正确的 lens key
+                            // 保持原有的服务同步逻辑
                             DroneControlService.updateCurrentLens(lensTypeToCode(lens))
                         }
                     },
                     { e -> Log.e(TAG, "cameraSource 错误: ${e.message}") }
                 )
         )
+        // 恢复原有轮询
         pollHandler.post(pollRunnable)
     }
 
@@ -200,9 +221,15 @@ class MainActivity : AppCompatActivity() {
         MediaDataCenter.getInstance()
             .getCameraStreamManager()
             .removeAvailableCameraUpdatedListener(availableCameraUpdatedListener)
+
+        // 释放新增控制器资源
+        if (::landingController.isInitialized) landingController.release()
+        if (::preflightController.isInitialized) preflightController.release()
+        visionController?.release()
+        runCatching { testCameraController?.stopVideoStream() }
     }
 
-    // ── HUD 轮询：N / E / U 三轴速度 (NEU 大地坐标系，非机体系) ───────
+    // ── HUD 轮询相关 (保持原样) ───────────────────────────────────────
     private fun pollVelocity() {
         try {
             KeyManager.getInstance().getValue(
@@ -211,7 +238,6 @@ class MainActivity : AppCompatActivity() {
                     override fun onSuccess(value: Velocity3D?) {
                         value ?: return
                         runOnUiThread {
-                            // value.x = 北向, value.y = 东向, value.z = 垂直 (NEU)
                             xSpeedText.text = "%+.2f m/s".format(value.x)
                             ySpeedText.text = "%+.2f m/s".format(value.y)
                             zSpeedText.text = "%+.2f m/s".format(value.z)
@@ -223,8 +249,10 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    // ── HUD 轮询：偏航速度 (差分 Attitude.yaw, °/s) ──────────────────
     private fun pollYawRate() {
+        // 如果处于检查状态，暂停用轮询数据覆盖UI文字 (避免遮盖 "✅ 检查完毕" 等提示)
+        if (::preflightController.isInitialized && preflightController.isChecking) return
+
         try {
             KeyManager.getInstance().getValue(
                 KeyTools.createKey(FlightControllerKey.KeyAircraftAttitude),
@@ -240,7 +268,11 @@ class MainActivity : AppCompatActivity() {
                                 if (delta >  180.0) delta -= 360.0
                                 if (delta < -180.0) delta += 360.0
                                 runOnUiThread {
-                                    yawRateText.text = "%+.1f °/s".format(delta / dtSec)
+                                    // 若检测到UI被置为错误提示颜色，则暂时不覆盖
+                                    if (yawRateText.currentTextColor != 0xFFD32F2F.toInt() &&
+                                        yawRateText.currentTextColor != 0xFF4CAF50.toInt()) {
+                                        yawRateText.text = "%+.1f °/s".format(delta / dtSec)
+                                    }
                                 }
                             }
                         }
@@ -253,7 +285,6 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    // ── HUD 轮询：剩余飞行时间 ───────────────────────────────────────
     private fun pollRemainingFlightTime() {
         try {
             KeyManager.getInstance().getValue(
@@ -274,16 +305,183 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    // ── 顶栏 UXSDK Widget 重挂载 ────────────────────────────────────
+    // ── 核心控制器交互 (新增) ───────────────────────────────────────
+    private fun setupControllerCallbacks() {
+        landingController.onTaskStateChanged = { state ->
+            runOnUiThread {
+                when (state) {
+                    TaskState.INACTIVE -> {
+                        btnAutoLanding?.text = "视觉降落"
+                        btnAutoLanding?.setBackgroundColor(0xFFD32F2F.toInt())
+                        btnAutoLanding?.isEnabled = true
+                        btnTakeoff?.isEnabled = true
+                    }
+                    TaskState.LANDING_PREP -> {
+                        btnAutoLanding?.text = "准备中..."
+                        btnAutoLanding?.setBackgroundColor(0xFFFF9800.toInt())
+                        btnAutoLanding?.isEnabled = false
+                        btnTakeoff?.isEnabled = false
+                    }
+                    TaskState.LANDING -> {
+                        btnAutoLanding?.text = "中止降落!"
+                        btnAutoLanding?.setBackgroundColor(0xFF4CAF50.toInt())
+                        btnAutoLanding?.isEnabled = true
+                        btnTakeoff?.isEnabled = false
+                        clearErrorOnUI()
+                    }
+                }
+            }
+        }
+
+        landingController.onError = { msg -> runOnUiThread { showErrorOnUI(msg) } }
+        landingController.onMessage = { msg -> runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() } }
+
+        preflightController.onCheckStarted = {
+            runOnUiThread {
+                btnTakeoff?.isEnabled = false
+                btnTakeoff?.text = "正在检查..."
+                Toast.makeText(this, "正在进行起飞前安全检查...", Toast.LENGTH_SHORT).show()
+                clearErrorOnUI()
+            }
+        }
+
+        preflightController.onCheckPassed = {
+            runOnUiThread {
+                btnTakeoff?.isEnabled = true
+                btnTakeoff?.text = "检查通过"
+                yawRateText.text = "✅ 检查完毕，可以起飞"
+                yawRateText.setTextColor(0xFF4CAF50.toInt())
+                yawRateText.textSize = 14f
+                Toast.makeText(this, "✅ 安全检查通过", Toast.LENGTH_LONG).show()
+            }
+        }
+
+        preflightController.onCheckFailed = { reason ->
+            runOnUiThread {
+                btnTakeoff?.isEnabled = true
+                btnTakeoff?.text = "重新检查"
+                showErrorOnUI(reason)
+            }
+        }
+    }
+
+    private fun ensureVisionSystemReady() {
+        if (testCameraController != null) return
+
+        try {
+            testCameraController = CameraController(currentCameraIndex)
+            visionController     = VisionController()
+
+            visionController?.onTargetLocked = { id, errX, errY, depthZ, yawDeg ->
+                currentTargetId = id
+                landingController.updateVisionData(id, errX, errY, depthZ, yawDeg)
+            }
+
+            testCameraController?.frameCallback = { data, offset, length, width, height ->
+                try {
+                    val isLanding = if (::landingController.isInitialized) landingController.getTaskState() == TaskState.LANDING else false
+                    val isPreflightChecking = if (::preflightController.isInitialized) preflightController.isChecking else false
+
+                    if (isLanding || isPreflightChecking) {
+                        currentTargetId = -1
+                        visionController?.processFrame(data, offset, length, width, height)
+                    }
+
+                    if (isPreflightChecking) {
+                        val isTargetLocked = (currentTargetId != -1)
+                        preflightController.processFrame(data, offset, width, height, isTargetLocked)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 视觉处理帧时发生异常: ${e.message}", e)
+                }
+            }
+            Log.i(TAG, "✅ 视觉流分发枢纽初始化完成")
+
+        } catch (e: Throwable) {
+            Log.e(TAG, "❌ 严重崩溃拦截: 控制器实例化失败 (可能是 OpenCV 未就绪)", e)
+            runOnUiThread {
+                Toast.makeText(this, "视觉模块初始化失败，请查看 Logcat！", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun onLandingClicked() {
+        if (!::landingController.isInitialized) {
+            Toast.makeText(this, "控制器未就绪，请重新连接飞机并重启APP", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (landingController.getTaskState() == TaskState.INACTIVE) {
+            ensureVisionSystemReady()
+            visionController?.resetTracking()
+            testCameraController?.startVideoStream()
+            landingController.startVisionLanding()
+        } else {
+            landingController.stopMission("用户手动中止")
+            runCatching { testCameraController?.stopVideoStream() }
+        }
+    }
+
+    private fun onTakeoffClicked() {
+        if (!::landingController.isInitialized || !::preflightController.isInitialized) {
+            Toast.makeText(this, "控制器未就绪，请重新连接飞机并重启APP", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (landingController.getTaskState() != TaskState.INACTIVE) {
+            Toast.makeText(this, "正在降落，无法进行预检", Toast.LENGTH_SHORT).show()
+            return
+        }
+        ensureVisionSystemReady()
+        testCameraController?.startVideoStream()
+        preflightController.startCheck()
+    }
+
+    // ── UI 辅助方法 ──────────────────────────────────────────────────
+    private fun initUIWidgets() {
+        // 原有组件
+        fpvWidget              = findViewById(R.id.fpvWidget)
+        shootPhotoWidget       = findViewById(R.id.shootPhotoWidget)
+        recordVideoWidget      = findViewById(R.id.recordVideoWidget)
+        focalZoomWidget        = findViewById(R.id.focalZoomWidget)
+        photoVideoSwitchWidget = findViewById(R.id.photoVideoSwitchWidget)
+
+        btnLensWide    = findViewById(R.id.btnLensWide)
+        btnLensZoom    = findViewById(R.id.btnLensZoom)
+        btnLensThermal = findViewById(R.id.btnLensThermal)
+
+        btnRecordWaypoint = findViewById(R.id.btnRecordWaypoint)
+        btnSaveWaypoints  = findViewById(R.id.btnSaveWaypoints)
+        btnClearWaypoints = findViewById(R.id.btnClearWaypoints)
+
+        xSpeedText        = findViewById(R.id.xSpeedText)
+        ySpeedText        = findViewById(R.id.ySpeedText)
+        zSpeedText        = findViewById(R.id.zSpeedText)
+        yawRateText       = findViewById(R.id.yawRateText)
+        remainingTimeText = findViewById(R.id.remainingTimeText)
+
+        // 新增的视觉降落与起飞按钮 (使用可空，防止XML还没加上直接崩溃)
+        btnAutoLanding = findViewById(R.id.btnAutoLanding)
+        btnTakeoff     = findViewById(R.id.btnTakeoff)
+    }
+
+    private fun showErrorOnUI(msg: String) {
+        yawRateText.text = msg
+        yawRateText.setTextColor(0xFFD32F2F.toInt())
+        yawRateText.textSize = 12f
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+    }
+
+    private fun clearErrorOnUI() {
+        yawRateText.setTextColor(0xFFFFFFFF.toInt())
+        yawRateText.textSize = 14f
+        yawRateText.text = "0.0 °/s"
+    }
+
     private fun reattachStatusWidgets() {
         Log.d(TAG_SDK, "重新挂载顶栏 Widget...")
         listOf(
-            R.id.systemStatusWidget,
-            R.id.flightModeWidget,
-            R.id.gpsSignalWidget,
-            R.id.rcSignalWidget,
-            R.id.videoSignalWidget,
-            R.id.batteryWidget
+            R.id.systemStatusWidget, R.id.flightModeWidget, R.id.gpsSignalWidget,
+            R.id.rcSignalWidget, R.id.videoSignalWidget, R.id.batteryWidget
         ).forEach { id -> findViewById<View>(id)?.let { reattachView(it) } }
         Log.d(TAG_SDK, "完成")
     }
@@ -296,7 +494,6 @@ class MainActivity : AppCompatActivity() {
         parent.addView(view, index, lp)
     }
 
-    // ── 镜头切换 ──────────────────────────────────────────────────────
     private fun setupLensButtons() {
         btnLensWide.setOnClickListener    { switchLens(CameraVideoStreamSourceType.WIDE_CAMERA) }
         btnLensZoom.setOnClickListener    { switchLens(CameraVideoStreamSourceType.ZOOM_CAMERA) }
@@ -312,20 +509,18 @@ class MainActivity : AppCompatActivity() {
     private fun switchLens(target: CameraVideoStreamSourceType) {
         Log.d(TAG, "切换镜头 → $target")
         KeyManager.getInstance().setValue(
-            CameraKey.KeyCameraVideoStreamSource.create(currentCameraIndex),
+            KeyTools.createKey(CameraKey.KeyCameraVideoStreamSource, currentCameraIndex),
             target,
             object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
                     Log.d(TAG, "切换成功 → $target")
-                    // 同步给 Service (UI → cameraSourceProcessor 也会同步，
-                    // 但流回调有延迟，这里立即更新更稳)
+                    // 保留原有行为：通知服务切换
                     DroneControlService.updateCurrentLens(streamTypeToCode(target))
                 }
                 override fun onFailure(error: IDJIError) {
                     Log.e(TAG, "切换失败: ${error.description()}")
                     runOnUiThread {
-                        Toast.makeText(this@MainActivity,
-                            "切换失败: ${error.description()}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, "切换失败: ${error.description()}", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -344,8 +539,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateViewVisibility(lensType: CameraLensType) {
-        val showZoom = lensType == CameraLensType.CAMERA_LENS_ZOOM
-                || lensType == CameraLensType.CAMERA_LENS_THERMAL
+        val showZoom = lensType == CameraLensType.CAMERA_LENS_ZOOM || lensType == CameraLensType.CAMERA_LENS_THERMAL
         focalZoomWidget.visibility = if (showZoom) View.VISIBLE else View.GONE
     }
 
@@ -356,7 +550,7 @@ class MainActivity : AppCompatActivity() {
         photoVideoSwitchWidget.updateCameraSource(pos, lens)
     }
 
-    // ── 镜头类型 ↔ 协议字节 转换 ────────────────────────────────────
+    // ── 镜头类型 ↔ 协议字节 转换 (保持原样) ────────────────────────────────────
     private fun lensTypeToCode(lens: CameraLensType): Byte = when (lens) {
         CameraLensType.CAMERA_LENS_ZOOM    -> DroneCommProtocol.CAM_LENS_ZOOM
         CameraLensType.CAMERA_LENS_THERMAL -> DroneCommProtocol.CAM_LENS_INFRARED

@@ -16,6 +16,8 @@ import dji.sdk.keyvalue.value.common.EmptyMsg
 import dji.v5.common.callback.CommonCallbacks
 import dji.v5.common.error.IDJIError
 import dji.v5.manager.KeyManager
+import dji.v5.manager.datacenter.MediaDataCenter
+import dji.v5.manager.interfaces.ICameraStreamManager
 
 /**
  * CameraController
@@ -23,18 +25,18 @@ import dji.v5.manager.KeyManager
  * 封装 MSDK V5 的相机控制。
  *
  * ── 关键修复 ───────────────────────────────────────────────────
- *   1. setVideoCfg 改用 `createCameraKey(..., cameraIndex, lensType)`，
- *      Mavic 3T 多镜头相机的分辨率/帧率是按 lens 分别配置的，
- *      旧实现用 `createKey(KeyVideoResolutionFrameRate, cameraIndex)`
- *      没指定 lens，可能配置到错误的镜头上。
- *      lens 通过 `lensProvider` 由外部 (Service/Activity) 注入当前激活镜头。
+ * 1. setVideoCfg 改用 `createCameraKey(..., cameraIndex, lensType)`，
+ * Mavic 3T 多镜头相机的分辨率/帧率是按 lens 分别配置的，
+ * 旧实现用 `createKey(KeyVideoResolutionFrameRate, cameraIndex)`
+ * 没指定 lens，可能配置到错误的镜头上。
+ * lens 通过 `lensProvider` 由外部 (Service/Activity) 注入当前激活镜头。
  *
- *   2. shootPhoto / startRecord / stopRecord 的 onSuccess 仅代表
- *      "指令被相机接受"，文件落盘 / 状态切换还需若干百毫秒。
- *      本版在 onSuccess 后用 mainHandler.postDelayed 加固定延迟再回 ACK，
- *      让 PSDK 端拿到 ACK 时操作确实完成。
- *      （没有用 KeyIsStoringPhoto / KeyIsRecording 这些状态键，
- *        因为不同 SDK 版本的命名不一致，固定延迟更稳。）
+ * 2. shootPhoto / startRecord / stopRecord 的 onSuccess 仅代表
+ * "指令被相机接受"，文件落盘 / 状态切换还需若干百毫秒。
+ * 本版在 onSuccess 后用 mainHandler.postDelayed 加固定延迟再回 ACK，
+ * 让 PSDK 端拿到 ACK 时操作确实完成。
+ * （没有用 KeyIsStoringPhoto / KeyIsRecording 这些状态键，
+ * 因为不同 SDK 版本的命名不一致，固定延迟更稳。）
  */
 class CameraController(
     private val cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
@@ -66,6 +68,60 @@ class CameraController(
      * 默认返回 WIDE，避免空指针。
      */
     var lensProvider: () -> Byte = { DroneCommProtocol.CAM_LENS_WIDE }
+
+// ─────────────────────────────────────────────────────
+    //  新增：视频流获取与分发逻辑 (解决 MainActivity 报错)
+    // ─────────────────────────────────────────────────────
+
+    /**
+     * 将底层视频流数据回调给外部 (如 VisionController, PreflightController)
+     */
+    var frameCallback: ((data: ByteArray, offset: Int, length: Int, width: Int, height: Int) -> Unit)? = null
+
+    /**
+     * MSDK V5 的视频帧监听器 (修复了接口名和类型推导报错)
+     */
+    private val frameListener = object : ICameraStreamManager.CameraFrameListener {
+        override fun onFrame(
+            frameData: ByteArray,
+            offset: Int,
+            length: Int,
+            width: Int,
+            height: Int,
+            format: ICameraStreamManager.FrameFormat
+        ) {
+            // 将拿到的 YUV 视频流数据分发给外部的回调函数
+            frameCallback?.invoke(frameData, offset, length, width, height)
+        }
+    }
+
+    /**
+     * 开启视频数据流
+     */
+    fun startVideoStream() {
+        log("CMD: startVideoStream")
+        try {
+            MediaDataCenter.getInstance().cameraStreamManager.addFrameListener(
+                cameraIndex,
+                ICameraStreamManager.FrameFormat.YUV420_888,
+                frameListener
+            )
+            log("视频帧监听器注册成功")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 注册视频帧监听器失败: ${e.message}", e)
+            log("流注册异常: ${e.message}")
+        }
+    }
+
+    /**
+     * 停止视频数据流
+     */
+    fun stopVideoStream() {
+        log("CMD: stopVideoStream")
+        // 移除监听器，节省系统资源
+        MediaDataCenter.getInstance().cameraStreamManager.removeFrameListener(frameListener)
+    }
+
 
     private fun currentLensType(): CameraLensType =
         when (lensProvider.invoke()) {
