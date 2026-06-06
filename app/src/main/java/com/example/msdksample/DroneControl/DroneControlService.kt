@@ -11,24 +11,8 @@ import dji.v5.manager.aircraft.payload.PayloadCenter
 import dji.v5.manager.aircraft.payload.PayloadIndexType
 import dji.v5.manager.aircraft.payload.listener.PayloadDataListener
 import java.util.concurrent.atomic.AtomicBoolean
+import android.annotation.SuppressLint
 
-/**
- * DroneControlService
- *
- * 后台前台服务：常驻监听 PSDK 低速通道，分发飞控 / 云台 / 相机 / 配件指令。
- *
- * 设计要点：
- *   1. 启动方式声明为 START_STICKY，被系统杀掉后会自动重启；
- *      `onStartCommand` 中重新调用 `startForeground`，确保 5s 内挂上通知，
- *      避免 ForegroundServiceDidNotStartInTimeException。
- *   2. PayloadManager 在 SDK 未注册完毕时可能为 null，
- *      `registerPayloadListener` 失败后会按指数退避自动重试。
- *   3. dispatchFrame 严格根据 controller 的 Boolean 回调结果决定 ACK 状态，
- *      不依赖 msg 字符串内容（旧实现用 contains("enabled") 会漏 ACK / 误 ACK）。
- *   4. 维护 `currentLensCode`：用户从 UI 切镜头时调 `updateCurrentLens`，
- *      Service 收到 CMD_CAM_ZOOM 切镜头时也会更新。CameraController.setVideoCfg
- *      用这个 lens 选择正确的 KeyVideoResolutionFrameRate。
- */
 class DroneControlService : Service() {
 
     companion object {
@@ -36,11 +20,9 @@ class DroneControlService : Service() {
         private const val CHANNEL_ID = "drone_ctrl_channel"
         private const val NOTIF_ID   = 1001
 
-        // PayloadListener 注册重试参数
         private const val REG_RETRY_BASE_MS = 500L
         private const val REG_RETRY_MAX_MS  = 8000L
 
-        /** 当前激活的镜头（被 MainActivity 与 Service 共享） */
         @Volatile
         var currentLensCode: Byte = DroneCommProtocol.CAM_LENS_WIDE
             private set
@@ -49,10 +31,12 @@ class DroneControlService : Service() {
             currentLensCode = lensCode
         }
 
-        /**
-         * 发送编码帧到 Jetson（供 WaypointController 等外部调用）。
-         * fire-and-forget：ACK 结果通过 payloadDataListener → dispatchFrame 中的 Toast 反馈。
-         */
+        // ★★★ 新增 1/3：方案B — 静态持有 MainActivity 传入的 Controller 引用 ★★★
+        @Volatile
+        var preflightController: PreflightController? = null
+        @Volatile
+        var landingController: LandingController? = null
+
         fun sendFrame(data: ByteArray) {
             val mgr = try {
                 PayloadCenter.getInstance().payloadManager[PayloadIndexType.UP]
@@ -105,16 +89,11 @@ class DroneControlService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
-        // 把 CameraController 与 Service 关联，用于读取 currentLensCode
         cameraCtrl.lensProvider = { currentLensCode }
         scheduleRegisterPayloadListener(immediate = true)
         Log.i(TAG, "Service 已启动，监听中")
     }
 
-    /**
-     * 系统重启 Service 时只走 onStartCommand（不走 onCreate），
-     * 这里再保险地 startForeground 一次，避免 5s 超时崩溃。
-     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification())
         if (!listenerRegistered.get()) {
@@ -137,11 +116,6 @@ class DroneControlService : Service() {
         when (frame.cmd) {
 
             // ── 飞控 ────────────────────────────────────────
-            // TAKEOFF/LAND/HOVER 使用双段回调：
-            //   onAccepted → CMD_ACK               (协议层快反馈，指令被接受)
-            //   onComplete → CMD_ACK_*_COMPLETE    (动作真正完成的延后通知)
-            // Jetson 上层需要等到完成通知才能安全地发下一条动作指令 (尤其是 VEL)。
-
             DroneCommProtocol.CMD_TAKEOFF -> droneCtrl.takeoff(
                 onAccepted = { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_TAKEOFF, ackOf(ok))
@@ -177,7 +151,6 @@ class DroneControlService : Service() {
                     sendAck(DroneCommProtocol.CMD_VEL, DroneCommProtocol.ACK_FAIL)
                     return
                 }
-                // 修正：严格根据 ok 回 ACK，不再用 msg.contains("enabled") 判断
                 droneCtrl.sendVelocity(vel.vx, vel.vy, vel.vz, vel.yawRate) { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_VEL, ackOf(ok))
                 }
@@ -188,7 +161,7 @@ class DroneControlService : Service() {
                 val p = DroneCommProtocol.parseGimbalYawFollowPayload(frame.payload) ?: run {
                     Log.e(TAG, "GIMBAL_YAW_FOLLOW 载荷解析失败 (len=${frame.payload.size})")
                     sendAck(DroneCommProtocol.CMD_GIMBAL_YAW_FOLLOW,
-                            DroneCommProtocol.ACK_FAIL)
+                        DroneCommProtocol.ACK_FAIL)
                     return
                 }
                 Log.i(TAG, "GIMBAL_YAW_FOLLOW pitch=${p.pitch} roll=${p.roll}")
@@ -201,12 +174,12 @@ class DroneControlService : Service() {
                 val p = DroneCommProtocol.parseGimbalAnglePayload(frame.payload) ?: run {
                     Log.e(TAG, "GIMBAL_ANGLE 载荷解析失败 (len=${frame.payload.size})")
                     sendAck(DroneCommProtocol.CMD_GIMBAL_ANGLE,
-                            DroneCommProtocol.ACK_FAIL)
+                        DroneCommProtocol.ACK_FAIL)
                     return
                 }
                 val modeStr = if (p.isRelative) "REL" else "ABS"
                 Log.i(TAG, "GIMBAL_ANGLE[$modeStr] pitch=${p.pitch} roll=${p.roll} " +
-                           "yaw=${p.yaw} dur=${p.duration}s")
+                        "yaw=${p.yaw} dur=${p.duration}s")
                 gimbalCtrl.rotateByAngle(p.mode, p.pitch, p.roll, p.yaw, p.duration) { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_GIMBAL_ANGLE, ackOf(ok))
                 }
@@ -227,7 +200,6 @@ class DroneControlService : Service() {
 
             DroneCommProtocol.CMD_CAM_SHOOT -> {
                 Log.i(TAG, "CAM_SHOOT")
-                // CameraController 内部会留 800ms 落盘等待再回调，再回 ACK
                 cameraCtrl.shootPhoto { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_CAM_SHOOT, ackOf(ok))
                 }
@@ -254,8 +226,8 @@ class DroneControlService : Service() {
                     return
                 }
                 Log.i(TAG, "CAM_VIDEO_CFG res=0x${p.resolution.toUByte().toString(16)} " +
-                           "fps=0x${p.frameRate.toUByte().toString(16)} " +
-                           "lens=0x${currentLensCode.toUByte().toString(16)}")
+                        "fps=0x${p.frameRate.toUByte().toString(16)} " +
+                        "lens=0x${currentLensCode.toUByte().toString(16)}")
                 cameraCtrl.setVideoCfg(p.resolution, p.frameRate) { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_CAM_VIDEO_CFG, ackOf(ok))
                 }
@@ -268,7 +240,7 @@ class DroneControlService : Service() {
                     return
                 }
                 Log.i(TAG, "CAM_ZOOM lens=0x${p.lens.toUByte().toString(16)} " +
-                           "ratio=${if (p.shouldSetRatio) p.ratio else "keep"}")
+                        "ratio=${if (p.shouldSetRatio) p.ratio else "keep"}")
                 cameraCtrl.setLensAndZoom(p.lens, p.shouldSetRatio, p.ratio) { ok, _ ->
                     if (ok) updateCurrentLens(p.lens)
                     sendAck(DroneCommProtocol.CMD_CAM_ZOOM, ackOf(ok))
@@ -291,6 +263,33 @@ class DroneControlService : Service() {
                 Log.i(TAG, "AUX_LIGHT $modeStr")
                 auxLightCtrl.setBottomAuxLight(p.mode) { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_AUX_LIGHT, ackOf(ok))
+                }
+            }
+
+            // ═══════════════════════════════════════════════════════════════════
+            // ★★★ 新增 2/3：任务/自动化指令 (0x5x 段，Jetson → RC) ★★★
+            // ═══════════════════════════════════════════════════════════════════
+            DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF -> {
+                Log.i(TAG, "来自 Jetson: 起飞前检查")
+                val ctrl = preflightController
+                if (ctrl != null) {
+                    mainHandler.post { ctrl.startCheck() }
+                    sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, DroneCommProtocol.ACK_OK)
+                } else {
+                    Log.w(TAG, "preflightController 未注入，忽略 CMD_CHECK_BEFORE_TAKEOFF")
+                    sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, DroneCommProtocol.ACK_FAIL)
+                }
+            }
+
+            DroneCommProtocol.CMD_VISION_LANDING -> {
+                Log.i(TAG, "来自 Jetson: 视觉降落")
+                val ctrl = landingController
+                if (ctrl != null) {
+                    mainHandler.post { ctrl.startVisionLanding() }
+                    sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_OK)
+                } else {
+                    Log.w(TAG, "landingController 未注入，忽略 CMD_VISION_LANDING")
+                    sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_FAIL)
                 }
             }
 
@@ -318,17 +317,31 @@ class DroneControlService : Service() {
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ★★★ 新增 3/3：带载荷帧编码（用于发送失败原因码）★★★
+    // ═══════════════════════════════════════════════════════════════════════
+    /**
+     * 编码带载荷通知帧 → [0xAA | cmd | payload.len | payload... | XOR]
+     * 与 Jetson 侧 drone_comm::encode_payload 字节级一致。
+     */
+    private fun encodePayload(cmd: Byte, payload: ByteArray): ByteArray {
+        val buf = ByteArray(4 + payload.size)
+        buf[0] = DroneCommProtocol.FRAME_HEADER
+        buf[1] = cmd
+        buf[2] = payload.size.toByte()
+        System.arraycopy(payload, 0, buf, 3, payload.size)
+        var xor = 0
+        for (i in 0 until buf.size - 1) {
+            xor = xor xor buf[i].toInt()
+        }
+        buf[buf.size - 1] = xor.toByte()
+        return buf
+    }
+
     private fun ackOf(ok: Boolean): Byte =
         if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL
 
     // ── 低速通道工具 ──────────────────────────────────────
-
-    /**
-     * 注册 PayloadListener，失败按指数退避自动重试。
-     *
-     * Service 启动时 PSDK 设备可能尚未连接，PayloadManager[UP] 为 null。
-     * 旧实现仅打了一条日志就放弃，导致后续即使飞机连上也收不到帧。
-     */
     private fun scheduleRegisterPayloadListener(immediate: Boolean) {
         val delay = if (immediate) 0L else nextRetryDelayMs
         mainHandler.postDelayed({ tryRegisterPayloadListener() }, delay)
@@ -352,7 +365,6 @@ class DroneControlService : Service() {
             return
         }
 
-        // 失败 → 指数退避重试 (上限 REG_RETRY_MAX_MS)
         Log.w(TAG, "PayloadManager[$payloadIndex] 暂未就绪，${nextRetryDelayMs}ms 后重试")
         scheduleRegisterPayloadListener(immediate = false)
         nextRetryDelayMs = (nextRetryDelayMs * 2).coerceAtMost(REG_RETRY_MAX_MS)
@@ -393,12 +405,6 @@ class DroneControlService : Service() {
         )
     }
 
-    /**
-     * 发送无载荷通知帧 (CMD_ACK_TAKEOFF_COMPLETE / _LAND_COMPLETE / _HOVER_COMPLETE)。
-     *
-     * 与 sendAck 的区别：sendAck 带 [ackedCmd, status] 两字节载荷，
-     * sendNotification 是纯通知帧 (len=0)，表示某个异步动作真正完成。
-     */
     private fun sendNotification(cmd: Byte) {
         val mgr = try {
             PayloadCenter.getInstance().payloadManager[payloadIndex]
@@ -423,6 +429,7 @@ class DroneControlService : Service() {
     }
 
     // ── 通知 ──────────────────────────────────────────────
+    @android.annotation.SuppressLint("NewApi")
     private fun createNotificationChannel() {
         val chan = NotificationChannel(
             CHANNEL_ID, "飞控监听",

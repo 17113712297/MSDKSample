@@ -94,6 +94,27 @@ object DroneCommProtocol {
     const val AUX_LIGHT_OFF:  Byte = 0x00
     const val AUX_LIGHT_ON:   Byte = 0x01
     const val AUX_LIGHT_AUTO: Byte = 0x02
+
+    // ═══════════════════════════════════════════════════════
+// 新增：任务/自动化指令 (0x5x 段，Jetson → RC)
+// ═══════════════════════════════════════════════════════
+    const val CMD_CHECK_BEFORE_TAKEOFF: Byte = 0x50  // 起飞前检查（无载荷）
+    const val CMD_VISION_LANDING: Byte       = 0x51  // 视觉降落（无载荷）
+
+    // ═══════════════════════════════════════════════════════
+// 新增：自检应答 (0x8x 段，RC → Jetson)
+// ═══════════════════════════════════════════════════════
+    const val CMD_ACK_CHECK_PASSED: Byte = 0x84.toByte()  // 检查通过
+    const val CMD_ACK_CHECK_FAILED: Byte = 0x85.toByte()  // 检查失败
+
+    // ═══════════════════════════════════════════════════════
+// 新增：自检失败原因码
+// ═══════════════════════════════════════════════════════
+    const val CHECK_FAIL_REASON_GRIP_NOT_DETECTED: Byte = 0x01
+    const val CHECK_FAIL_REASON_CV_ERROR: Byte          = 0x02
+    const val CHECK_FAIL_REASON_GIMBAL_ERROR: Byte      = 0x03
+    const val CHECK_FAIL_REASON_UNKNOWN: Byte           = 0xFF.toByte()
+
     // ── 载荷长度常量 ─────────────────────────────────────
     const val VEL_PAYLOAD_LEN               = 16
     const val GIMBAL_YAW_FOLLOW_PAYLOAD_LEN = 8
@@ -180,10 +201,28 @@ object DroneCommProtocol {
         if (payload.size < AUX_LIGHT_PAYLOAD_LEN) return null
         return AuxLightPayload(mode = payload[0])
     }
+
+    /**
+     * 编码带载荷帧 → [0xAA | cmd | payload.len | payload... | XOR]
+     * 与 Jetson 侧 drone_comm::encode_payload 字节级一致。
+     */
+    fun encodePayload(cmd: Byte, payload: ByteArray): ByteArray {
+        val buf = ByteArray(4 + payload.size)
+        buf[0] = FRAME_HEADER
+        buf[1] = cmd
+        buf[2] = payload.size.toByte()
+        System.arraycopy(payload, 0, buf, 3, payload.size)
+        var xor = 0
+        for (i in 0 until buf.size - 1) {
+            xor = xor xor buf[i].toInt()
+        }
+        buf[buf.size - 1] = xor.toByte()
+        return buf
+    }
+
     // ─────────────────────────────────────────────────────
     //  编码 (ACK 回包)
     // ─────────────────────────────────────────────────────
-
     fun encodeAck(ackedCmd: Byte, status: Byte): ByteArray {
         val payload = byteArrayOf(ackedCmd, status)
         return encodeFrame(CMD_ACK, payload)

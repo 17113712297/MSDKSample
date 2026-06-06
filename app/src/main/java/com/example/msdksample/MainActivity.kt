@@ -94,6 +94,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var preflightController: PreflightController
     @Volatile private var currentTargetId = -1
 
+    // ── 新增：跟踪降落状态以检测 LANDING→INACTIVE 完成信号 ──
+    @Volatile private var previousLandingState: TaskState = TaskState.INACTIVE
+
     // ── 轮询 Handler (保留原有功能) ─────────────────────────────────────────────────
     private val pollHandler  = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
@@ -150,6 +153,8 @@ class MainActivity : AppCompatActivity() {
             landingController = LandingController()
             preflightController = PreflightController()
             setupControllerCallbacks()
+            DroneControlService.preflightController = preflightController
+            DroneControlService.landingController = landingController
         } catch (e: Exception) {
             Log.e(TAG, "⚠️ 控制器初始化失败 (SDK可能未就绪或未连接飞机)", e)
             showErrorOnUI("控制器初始化失败，请确保飞机已连接！")
@@ -305,7 +310,6 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    // ── 核心控制器交互 (新增) ───────────────────────────────────────
     private fun setupControllerCallbacks() {
         landingController.onTaskStateChanged = { state ->
             runOnUiThread {
@@ -328,13 +332,30 @@ class MainActivity : AppCompatActivity() {
                         btnAutoLanding?.isEnabled = true
                         btnTakeoff?.isEnabled = false
                         clearErrorOnUI()
+                        previousLandingState = TaskState.LANDING
                     }
+                }
+            }
+            // ═════════════════════════════════════════════════
+            // ★ 新增：降落完成时通知 Jetson
+            // ═════════════════════════════════════════════════
+            if (state == TaskState.INACTIVE && previousLandingState == TaskState.LANDING) {
+                previousLandingState = TaskState.INACTIVE
+                runCatching {
+                    val frame = DroneCommProtocol.encodeSimple(
+                        DroneCommProtocol.CMD_ACK_LAND_COMPLETE
+                    )
+                    DroneControlService.sendFrame(frame)
                 }
             }
         }
 
-        landingController.onError = { msg -> runOnUiThread { showErrorOnUI(msg) } }
-        landingController.onMessage = { msg -> runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() } }
+        landingController.onError = { msg ->
+            runOnUiThread { showErrorOnUI(msg) }
+        }
+        landingController.onMessage = { msg ->
+            runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+        }
 
         preflightController.onCheckStarted = {
             runOnUiThread {
@@ -354,6 +375,15 @@ class MainActivity : AppCompatActivity() {
                 yawRateText.textSize = 14f
                 Toast.makeText(this, "✅ 安全检查通过", Toast.LENGTH_LONG).show()
             }
+            // ═════════════════════════════════════════
+            // ★ 新增：通知 Jetson 检查通过
+            // ═════════════════════════════════════════
+            runCatching {
+                val frame = DroneCommProtocol.encodeSimple(
+                    DroneCommProtocol.CMD_ACK_CHECK_PASSED
+                )
+                DroneControlService.sendFrame(frame)
+            }
         }
 
         preflightController.onCheckFailed = { reason ->
@@ -362,8 +392,36 @@ class MainActivity : AppCompatActivity() {
                 btnTakeoff?.text = "重新检查"
                 showErrorOnUI(reason)
             }
+            // ═════════════════════════════════════════
+            // ★ 新增：通知 Jetson 检查失败（带原因码）
+            // ═════════════════════════════════════════
+            runCatching {
+                val reasonCode: Byte = when {
+                    reason.contains("夹爪", ignoreCase = true) ||
+                            reason.contains("grip", ignoreCase = true) ||
+                            reason.contains("遮挡", ignoreCase = true)
+                        -> DroneCommProtocol.CHECK_FAIL_REASON_GRIP_NOT_DETECTED
+
+                    reason.contains("cv", ignoreCase = true) ||
+                            reason.contains("vision", ignoreCase = true) ||
+                            reason.contains("视觉", ignoreCase = true)
+                        -> DroneCommProtocol.CHECK_FAIL_REASON_CV_ERROR
+
+                    reason.contains("云台", ignoreCase = true) ||
+                            reason.contains("gimbal", ignoreCase = true)
+                        -> DroneCommProtocol.CHECK_FAIL_REASON_GIMBAL_ERROR
+
+                    else -> DroneCommProtocol.CHECK_FAIL_REASON_UNKNOWN
+                }
+                val frame = DroneCommProtocol.encodePayload(
+                    DroneCommProtocol.CMD_ACK_CHECK_FAILED,
+                    byteArrayOf(reasonCode)
+                )
+                DroneControlService.sendFrame(frame)
+            }
         }
     }
+
 
     private fun ensureVisionSystemReady() {
         if (testCameraController != null) return
