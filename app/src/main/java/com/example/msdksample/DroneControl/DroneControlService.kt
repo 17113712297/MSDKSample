@@ -31,11 +31,17 @@ class DroneControlService : Service() {
             currentLensCode = lensCode
         }
 
-        // ★★★ 新增 1/3：方案B — 静态持有 MainActivity 传入的 Controller 引用 ★★★
+        // ★★★ 静态持有 MainActivity 传入的 Controller 引用 ★★★
         @Volatile
         var preflightController: PreflightController? = null
         @Volatile
         var landingController: LandingController? = null
+
+        // ★ 新增：方案B — 用于触发 MainActivity 开启/关闭视觉流的闭包
+        @Volatile
+        var onStartCameraStream: (() -> Unit)? = null
+        @Volatile
+        var onStopCameraStream: (() -> Unit)? = null
 
         fun sendFrame(data: ByteArray) {
             val mgr = try {
@@ -267,12 +273,15 @@ class DroneControlService : Service() {
             }
 
             // ═══════════════════════════════════════════════════════════════════
-            // ★★★ 新增 2/3：任务/自动化指令 (0x5x 段，Jetson → RC) ★★★
+            // ★ 任务/自动化指令 (0x5x 段，Jetson → RC)
             // ═══════════════════════════════════════════════════════════════════
             DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF -> {
                 Log.i(TAG, "来自 Jetson: 起飞前检查")
                 val ctrl = preflightController
                 if (ctrl != null) {
+                    // ★ 新增：触发开启相机流与视觉管线
+                    onStartCameraStream?.invoke()
+
                     mainHandler.post { ctrl.startCheck() }
                     sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, DroneCommProtocol.ACK_OK)
                 } else {
@@ -285,6 +294,9 @@ class DroneControlService : Service() {
                 Log.i(TAG, "来自 Jetson: 视觉降落")
                 val ctrl = landingController
                 if (ctrl != null) {
+                    // ★ 新增：触发开启相机流与视觉管线
+                    onStartCameraStream?.invoke()
+
                     mainHandler.post { ctrl.startVisionLanding() }
                     sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_OK)
                 } else {
@@ -317,9 +329,6 @@ class DroneControlService : Service() {
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // ★★★ 新增 3/3：带载荷帧编码（用于发送失败原因码）★★★
-    // ═══════════════════════════════════════════════════════════════════════
     /**
      * 编码带载荷通知帧 → [0xAA | cmd | payload.len | payload... | XOR]
      * 与 Jetson 侧 drone_comm::encode_payload 字节级一致。
@@ -429,7 +438,7 @@ class DroneControlService : Service() {
     }
 
     // ── 通知 ──────────────────────────────────────────────
-    @android.annotation.SuppressLint("NewApi")
+    @SuppressLint("NewApi")
     private fun createNotificationChannel() {
         val chan = NotificationChannel(
             CHANNEL_ID, "飞控监听",
