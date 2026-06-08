@@ -153,8 +153,23 @@ class MainActivity : AppCompatActivity() {
             landingController = LandingController()
             preflightController = PreflightController()
             setupControllerCallbacks()
+
+            // 注入控制器引用给 Service
             DroneControlService.preflightController = preflightController
             DroneControlService.landingController = landingController
+
+            // ★ 新增：注入开启与关闭相机流的闭包
+            DroneControlService.onStartCameraStream = {
+                runOnUiThread { // 确保在主线程初始化 UI 强相关的视觉组件
+                    ensureVisionSystemReady()
+                    visionController?.resetTracking() // PSDK 触发视觉降落也需要重置追踪
+                    testCameraController?.startVideoStream()
+                }
+            }
+            DroneControlService.onStopCameraStream = {
+                runCatching { testCameraController?.stopVideoStream() }
+            }
+
         } catch (e: Exception) {
             Log.e(TAG, "⚠️ 控制器初始化失败 (SDK可能未就绪或未连接飞机)", e)
             showErrorOnUI("控制器初始化失败，请确保飞机已连接！")
@@ -336,11 +351,16 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+
             // ═════════════════════════════════════════════════
-            // ★ 新增：降落完成时通知 Jetson
+            // ★ 新增：降落完成时关闭视频流并通知 Jetson
             // ═════════════════════════════════════════════════
             if (state == TaskState.INACTIVE && previousLandingState == TaskState.LANDING) {
                 previousLandingState = TaskState.INACTIVE
+
+                // ★ 新增：关闭视频流
+                DroneControlService.onStopCameraStream?.invoke()
+
                 runCatching {
                     val frame = DroneCommProtocol.encodeSimple(
                         DroneCommProtocol.CMD_ACK_LAND_COMPLETE
@@ -375,9 +395,11 @@ class MainActivity : AppCompatActivity() {
                 yawRateText.textSize = 14f
                 Toast.makeText(this, "✅ 安全检查通过", Toast.LENGTH_LONG).show()
             }
-            // ═════════════════════════════════════════
-            // ★ 新增：通知 Jetson 检查通过
-            // ═════════════════════════════════════════
+
+            // ★ 新增：自检通过后关闭视频流
+            DroneControlService.onStopCameraStream?.invoke()
+
+            // 通知 Jetson 检查通过
             runCatching {
                 val frame = DroneCommProtocol.encodeSimple(
                     DroneCommProtocol.CMD_ACK_CHECK_PASSED
@@ -392,9 +414,11 @@ class MainActivity : AppCompatActivity() {
                 btnTakeoff?.text = "重新检查"
                 showErrorOnUI(reason)
             }
-            // ═════════════════════════════════════════
-            // ★ 新增：通知 Jetson 检查失败（带原因码）
-            // ═════════════════════════════════════════
+
+            // ★ 新增：自检失败后关闭视频流
+            DroneControlService.onStopCameraStream?.invoke()
+
+            // 通知 Jetson 检查失败（带原因码）
             runCatching {
                 val reasonCode: Byte = when {
                     reason.contains("夹爪", ignoreCase = true) ||
@@ -517,7 +541,7 @@ class MainActivity : AppCompatActivity() {
         yawRateText       = findViewById(R.id.yawRateText)
         remainingTimeText = findViewById(R.id.remainingTimeText)
 
-        // 新增的视觉降落与起飞按钮 (使用可空，防止XML还没加上直接崩溃)
+        // 新增的视觉降落与起飞按钮
         btnAutoLanding = findViewById(R.id.btnAutoLanding)
         btnTakeoff     = findViewById(R.id.btnTakeoff)
     }
