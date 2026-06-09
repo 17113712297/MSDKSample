@@ -166,6 +166,9 @@ class MainActivity : AppCompatActivity() {
                     testCameraController?.startVideoStream()
                 }
             }
+            DroneControlService.onResetVisionTracking = {
+                visionController?.resetTracking()
+            }
             DroneControlService.onStopCameraStream = {
                 runCatching { testCameraController?.stopVideoStream() }
             }
