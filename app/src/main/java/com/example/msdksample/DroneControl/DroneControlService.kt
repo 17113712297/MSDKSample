@@ -31,17 +31,21 @@ class DroneControlService : Service() {
             currentLensCode = lensCode
         }
 
-        // ★★★ 静态持有 MainActivity 传入的 Controller 引用 ★★★
+        // 静态持有 MainActivity 传入的 Controller 引用
         @Volatile
         var preflightController: PreflightController? = null
         @Volatile
         var landingController: LandingController? = null
 
-        // ★ 新增：方案B — 用于触发 MainActivity 开启/关闭视觉流的闭包
+        // 用于触发 MainActivity 开启/关闭视觉流的闭包
         @Volatile
         var onStartCameraStream: (() -> Unit)? = null
         @Volatile
         var onStopCameraStream: (() -> Unit)? = null
+
+        // ⭐【新增控制点】：显式暴露给 MainActivity 的视觉重置闭包，确保在状态机跳转前清除黏性锁
+        @Volatile
+        var onResetVisionTracking: (() -> Unit)? = null
 
         fun sendFrame(data: ByteArray) {
             val mgr = try {
@@ -152,7 +156,14 @@ class DroneControlService : Service() {
                 }
             )
 
+            // ⭐【核心修改点 1】：对 Jetson 发送的速度控制指令增加状态拦截锁
             DroneCommProtocol.CMD_VEL -> {
+                if (landingController?.getTaskState() == TaskState.LANDING) {
+                    Log.w(TAG, "🚨 [拦截控制冲突] 本端正在闭合执行 Aruco 降落判定，已强行丢弃来自 Jetson 的 CMD_VEL 指令")
+                    sendAck(DroneCommProtocol.CMD_VEL, DroneCommProtocol.ACK_FAIL)
+                    return
+                }
+
                 val vel = DroneCommProtocol.parseVelPayload(frame.payload) ?: run {
                     sendAck(DroneCommProtocol.CMD_VEL, DroneCommProtocol.ACK_FAIL)
                     return
@@ -176,6 +187,7 @@ class DroneControlService : Service() {
                 }
             }
 
+            // ── 云台角度 ─────────────────────────────────────
             DroneCommProtocol.CMD_GIMBAL_ANGLE -> {
                 val p = DroneCommProtocol.parseGimbalAnglePayload(frame.payload) ?: run {
                     Log.e(TAG, "GIMBAL_ANGLE 载荷解析失败 (len=${frame.payload.size})")
@@ -272,29 +284,28 @@ class DroneControlService : Service() {
                 }
             }
 
-            // ═══════════════════════════════════════════════════════════════════
-            // ★ 任务/自动化指令 (0x5x 段，Jetson → RC)
-            // ═══════════════════════════════════════════════════════════════════
+            // ── 任务/自动化指令 ───────────────────────────────
             DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF -> {
                 Log.i(TAG, "来自 Jetson: 起飞前检查")
                 val ctrl = preflightController
                 if (ctrl != null) {
-                    // ★ 新增：触发开启相机流与视觉管线
+                    onResetVisionTracking?.invoke() // 自检前也同步清理历史缓存
                     onStartCameraStream?.invoke()
-
                     mainHandler.post { ctrl.startCheck() }
                     sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, DroneCommProtocol.ACK_OK)
                 } else {
-                    Log.w(TAG, "preflightController 未注入，忽略 CMD_CHECK_BEFORE_TAKEOFF")
+                    Log.w(TAG, "preflightController 未注入")
                     sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, DroneCommProtocol.ACK_FAIL)
                 }
             }
 
+            // ⭐【核心修改点 2】：视觉降落分支，加入前置同步重置追踪，确保时序保底
             DroneCommProtocol.CMD_VISION_LANDING -> {
                 Log.i(TAG, "来自 Jetson: 视觉降落")
                 val ctrl = landingController
                 if (ctrl != null) {
-                    // ★ 新增：触发开启相机流与视觉管线
+                    // 先在当前 Binder 线程立即触发重置，消除主线程排队带来的时序滞后风险
+                    onResetVisionTracking?.invoke()
                     onStartCameraStream?.invoke()
 
                     mainHandler.post { ctrl.startVisionLanding() }
@@ -305,7 +316,7 @@ class DroneControlService : Service() {
                 }
             }
 
-            // ── 航点指令 ACK (Jetson 对 Android 主动指令的应答) ──
+            // ── 航点指令 ACK ─────────────────────────────────
             DroneCommProtocol.CMD_RECORD_WAYPOINT,
             DroneCommProtocol.CMD_SAVE_WAYPOINTS,
             DroneCommProtocol.CMD_CLEAR_WAYPOINTS -> {
@@ -329,28 +340,9 @@ class DroneControlService : Service() {
         }
     }
 
-    /**
-     * 编码带载荷通知帧 → [0xAA | cmd | payload.len | payload... | XOR]
-     * 与 Jetson 侧 drone_comm::encode_payload 字节级一致。
-     */
-    private fun encodePayload(cmd: Byte, payload: ByteArray): ByteArray {
-        val buf = ByteArray(4 + payload.size)
-        buf[0] = DroneCommProtocol.FRAME_HEADER
-        buf[1] = cmd
-        buf[2] = payload.size.toByte()
-        System.arraycopy(payload, 0, buf, 3, payload.size)
-        var xor = 0
-        for (i in 0 until buf.size - 1) {
-            xor = xor xor buf[i].toInt()
-        }
-        buf[buf.size - 1] = xor.toByte()
-        return buf
-    }
-
     private fun ackOf(ok: Boolean): Byte =
         if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL
 
-    // ── 低速通道工具 ──────────────────────────────────────
     private fun scheduleRegisterPayloadListener(immediate: Boolean) {
         val delay = if (immediate) 0L else nextRetryDelayMs
         mainHandler.postDelayed({ tryRegisterPayloadListener() }, delay)
@@ -437,7 +429,6 @@ class DroneControlService : Service() {
         )
     }
 
-    // ── 通知 ──────────────────────────────────────────────
     @SuppressLint("NewApi")
     private fun createNotificationChannel() {
         val chan = NotificationChannel(
