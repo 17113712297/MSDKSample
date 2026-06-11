@@ -99,7 +99,6 @@ class DroneControlService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
-        cameraCtrl.lensProvider = { currentLensCode }
         scheduleRegisterPayloadListener(immediate = true)
         Log.i(TAG, "Service 已启动，监听中")
     }
@@ -246,7 +245,7 @@ class DroneControlService : Service() {
                 Log.i(TAG, "CAM_VIDEO_CFG res=0x${p.resolution.toUByte().toString(16)} " +
                         "fps=0x${p.frameRate.toUByte().toString(16)} " +
                         "lens=0x${currentLensCode.toUByte().toString(16)}")
-                cameraCtrl.setVideoCfg(p.resolution, p.frameRate) { ok, _ ->
+                cameraCtrl.setVideoCfg(currentLensCode, p.resolution, p.frameRate) { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_CAM_VIDEO_CFG, ackOf(ok))
                 }
             }
