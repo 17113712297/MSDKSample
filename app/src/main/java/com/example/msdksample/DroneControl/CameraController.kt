@@ -19,68 +19,21 @@ import dji.v5.manager.KeyManager
 import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.interfaces.ICameraStreamManager
 
-/**
- * CameraController
- *
- * 封装 MSDK V5 的相机控制。
- *
- * ── 关键修复 ───────────────────────────────────────────────────
- * 1. setVideoCfg 改用 `createCameraKey(..., cameraIndex, lensType)`，
- * Mavic 3T 多镜头相机的分辨率/帧率是按 lens 分别配置的，
- * 旧实现用 `createKey(KeyVideoResolutionFrameRate, cameraIndex)`
- * 没指定 lens，可能配置到错误的镜头上。
- * lens 通过 `lensProvider` 由外部 (Service/Activity) 注入当前激活镜头。
- *
- * 2. shootPhoto / startRecord / stopRecord 的 onSuccess 仅代表
- * "指令被相机接受"，文件落盘 / 状态切换还需若干百毫秒。
- * 本版在 onSuccess 后用 mainHandler.postDelayed 加固定延迟再回 ACK，
- * 让 PSDK 端拿到 ACK 时操作确实完成。
- * （没有用 KeyIsStoringPhoto / KeyIsRecording 这些状态键，
- * 因为不同 SDK 版本的命名不一致，固定延迟更稳。）
- */
 class CameraController(
     private val cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 ) {
 
     companion object {
         private const val TAG = "CameraController"
-
-        /**
-         * 拍照后等待落盘的延迟。
-         * 经验值：JPG 单拍约 300~500ms，JPG+RAW 约 600~1500ms。
-         * 这里取 800ms 覆盖多数场景；超大尺寸 RAW 可上调到 1500ms。
-         */
         private const val PHOTO_SETTLE_MS = 800L
-
-        /**
-         * 录像启停后等待状态稳定的延迟。
-         * 经验值：start/stop 内部状态切换 < 200ms，取 300ms 留余量。
-         */
         private const val RECORD_SETTLE_MS = 300L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     var logCallback: ((String) -> Unit)? = null
 
-    /**
-     * 当前激活镜头提供者。Service 调用 `updateCurrentLens` 时变化，
-     * 或 MainActivity 镜头按钮触发后由 Service 同步。
-     * 默认返回 WIDE，避免空指针。
-     */
-    var lensProvider: () -> Byte = { DroneCommProtocol.CAM_LENS_WIDE }
-
-// ─────────────────────────────────────────────────────
-    //  新增：视频流获取与分发逻辑 (解决 MainActivity 报错)
-    // ─────────────────────────────────────────────────────
-
-    /**
-     * 将底层视频流数据回调给外部 (如 VisionController, PreflightController)
-     */
     var frameCallback: ((data: ByteArray, offset: Int, length: Int, width: Int, height: Int) -> Unit)? = null
 
-    /**
-     * MSDK V5 的视频帧监听器 (修复了接口名和类型推导报错)
-     */
     private val frameListener = object : ICameraStreamManager.CameraFrameListener {
         override fun onFrame(
             frameData: ByteArray,
@@ -90,14 +43,10 @@ class CameraController(
             height: Int,
             format: ICameraStreamManager.FrameFormat
         ) {
-            // 将拿到的 YUV 视频流数据分发给外部的回调函数
             frameCallback?.invoke(frameData, offset, length, width, height)
         }
     }
 
-    /**
-     * 开启视频数据流
-     */
     fun startVideoStream() {
         log("CMD: startVideoStream")
         try {
@@ -113,26 +62,10 @@ class CameraController(
         }
     }
 
-    /**
-     * 停止视频数据流
-     */
     fun stopVideoStream() {
         log("CMD: stopVideoStream")
-        // 移除监听器，节省系统资源
         MediaDataCenter.getInstance().cameraStreamManager.removeFrameListener(frameListener)
     }
-
-
-    private fun currentLensType(): CameraLensType =
-        when (lensProvider.invoke()) {
-            DroneCommProtocol.CAM_LENS_ZOOM     -> CameraLensType.CAMERA_LENS_ZOOM
-            DroneCommProtocol.CAM_LENS_INFRARED -> CameraLensType.CAMERA_LENS_THERMAL
-            else                                -> CameraLensType.CAMERA_LENS_WIDE
-        }
-
-    // ─────────────────────────────────────────────────────
-    //  工作模式
-    // ─────────────────────────────────────────────────────
 
     fun setMode(isPhoto: Boolean, onResult: (Boolean, String) -> Unit) {
         val mode = if (isPhoto) CameraMode.PHOTO_NORMAL else CameraMode.VIDEO_NORMAL
@@ -155,24 +88,12 @@ class CameraController(
         )
     }
 
-    // ─────────────────────────────────────────────────────
-    //  拍照
-    // ─────────────────────────────────────────────────────
-
-    /**
-     * 单拍一张。
-     *
-     * onSuccess 仅表示「快门指令被接受」，相机内部还在写文件 (尤其 RAW+JPG)。
-     * 这里 onSuccess 后再延迟 PHOTO_SETTLE_MS 回调，
-     * 让 PSDK 端拿到 ACK_OK 时照片大概率已经实际落盘。
-     */
     fun shootPhoto(onResult: (Boolean, String) -> Unit) {
         log("CMD: shootPhoto")
         KeyManager.getInstance().performAction(
             KeyTools.createKey(CameraKey.KeyStartShootPhoto, cameraIndex),
             object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
                 override fun onSuccess(value: EmptyMsg?) {
-                    log("shootPhoto accepted, ${PHOTO_SETTLE_MS}ms 后回 ACK")
                     mainHandler.postDelayed({
                         log("shootPhoto OK")
                         onResult(true, "OK")
@@ -187,17 +108,12 @@ class CameraController(
         )
     }
 
-    // ─────────────────────────────────────────────────────
-    //  录像
-    // ─────────────────────────────────────────────────────
-
     fun startRecord(onResult: (Boolean, String) -> Unit) {
         log("CMD: startRecord")
         KeyManager.getInstance().performAction(
             KeyTools.createKey(CameraKey.KeyStartRecord, cameraIndex),
             object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
                 override fun onSuccess(value: EmptyMsg?) {
-                    log("startRecord accepted, ${RECORD_SETTLE_MS}ms 后回 ACK")
                     mainHandler.postDelayed({
                         log("startRecord OK")
                         onResult(true, "OK")
@@ -218,7 +134,6 @@ class CameraController(
             KeyTools.createKey(CameraKey.KeyStopRecord, cameraIndex),
             object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
                 override fun onSuccess(value: EmptyMsg?) {
-                    log("stopRecord accepted, ${RECORD_SETTLE_MS}ms 后回 ACK")
                     mainHandler.postDelayed({
                         log("stopRecord OK")
                         onResult(true, "OK")
@@ -233,30 +148,31 @@ class CameraController(
         )
     }
 
-    // ─────────────────────────────────────────────────────
-    //  分辨率 + 帧率
-    // ─────────────────────────────────────────────────────
+    // ⭐ 深度重构点：参数显式依赖 lensCode，与外部状态解耦；增加红外镜头拦截
+    fun setVideoCfg(lensCode: Byte, resCode: Byte, fpsCode: Byte, onResult: (Boolean, String) -> Unit) {
+        val lens = mapLensCodeToCameraLensType(lensCode)
 
-    fun setVideoCfg(resCode: Byte, fpsCode: Byte, onResult: (Boolean, String) -> Unit) {
+        // 【核心保护机制】：多镜头模组中的红外相机分辨率被硬件锁死在 640x512，拒绝更改
+        if (lens == CameraLensType.CAMERA_LENS_THERMAL) {
+            log("CMD: setVideoCfg 拦截 - 当前在红外画面，分辨率固定不支持修改")
+            onResult(false, "红外镜头不支持修改分辨率")
+            return
+        }
+
         val res = mapResolution(resCode) ?: run {
-            onResult(false, "unknown resolution code: 0x${resCode.toUByte().toString(16)}")
+            onResult(false, "未知的辨率代码")
             return
         }
         val fps = mapFrameRate(fpsCode) ?: run {
-            onResult(false, "unknown fps code: 0x${fpsCode.toUByte().toString(16)}")
+            onResult(false, "未知的帧率代码")
             return
         }
-        val lens = currentLensType()
-        log("CMD: setVideoCfg res=$res fps=$fps lens=$lens")
 
+        log("CMD: setVideoCfg res=$res fps=$fps lens=$lens")
         val combo = VideoResolutionFrameRate(res, fps)
-        // 关键修复：必须用 createCameraKey 带 lensType，否则多镜头相机配错位
+
         KeyManager.getInstance().setValue(
-            KeyTools.createCameraKey(
-                CameraKey.KeyVideoResolutionFrameRate,
-                cameraIndex,
-                lens
-            ),
+            KeyTools.createCameraKey(CameraKey.KeyVideoResolutionFrameRate, cameraIndex, lens),
             combo,
             object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
@@ -265,11 +181,23 @@ class CameraController(
                 }
                 override fun onFailure(error: IDJIError) {
                     val msg = error.description() ?: error.errorCode()
-                    log("setVideoCfg FAIL: $msg")
-                    onResult(false, msg)
+                    // 增加对【录制中】这种高发冲突状态的拦截提示
+                    if (msg.contains("recording", ignoreCase = true) || msg.contains("busy", ignoreCase = true)) {
+                        log("setVideoCfg FAIL: 正在录制中无法切换分辨率")
+                        onResult(false, "录制中，无法切换")
+                    } else {
+                        log("setVideoCfg FAIL: $msg")
+                        onResult(false, msg)
+                    }
                 }
             }
         )
+    }
+
+    private fun mapLensCodeToCameraLensType(code: Byte): CameraLensType = when (code) {
+        DroneCommProtocol.CAM_LENS_ZOOM     -> CameraLensType.CAMERA_LENS_ZOOM
+        DroneCommProtocol.CAM_LENS_INFRARED -> CameraLensType.CAMERA_LENS_THERMAL
+        else                                -> CameraLensType.CAMERA_LENS_WIDE
     }
 
     private fun mapResolution(code: Byte): VideoResolution? = when (code) {
@@ -288,10 +216,6 @@ class CameraController(
         DroneCommProtocol.CAM_FPS_60 -> VideoFrameRate.RATE_60FPS
         else -> null
     }
-
-    // ─────────────────────────────────────────────────────
-    //  镜头切换 + 变焦
-    // ─────────────────────────────────────────────────────
 
     fun setLensAndZoom(
         lensCode: Byte, shouldSetRatio: Boolean, ratio: Float,
@@ -326,12 +250,6 @@ class CameraController(
         )
     }
 
-    /**
-     * 设置数字变焦倍数 (仅变焦镜头)
-     *
-     * KeyCameraZoomRatios 要求同时指定 ComponentIndexType + CameraLensType，
-     * 必须使用 KeyTools.createCameraKey 三参重载 (createKey 不支持 CameraLensType)。
-     */
     private fun setZoomRatio(ratio: Float, onResult: (Boolean, String) -> Unit) {
         KeyManager.getInstance().setValue(
             KeyTools.createCameraKey(

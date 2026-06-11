@@ -68,6 +68,9 @@ class MainActivity : AppCompatActivity() {
     private var btnAutoLanding: Button? = null
     private var btnTakeoff: Button? = null
 
+    // ★ 新增：切换分辨率按钮
+    private lateinit var btnSwitchRes: Button
+
     // ── 左侧 HUD TextView ────────────────────────────────────────────
     private lateinit var xSpeedText: TextView
     private lateinit var ySpeedText: TextView
@@ -77,6 +80,9 @@ class MainActivity : AppCompatActivity() {
 
     // ── 状态管理 ───────────────────────────────────────────
     private var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
+
+    // ★ 新增：记录当前分辨率状态（默认设为 4K）
+    private var is4K = true
 
     private val cameraSourceProcessor = DataProcessor.create(
         Pair(ComponentIndexType.UNKNOWN, CameraLensType.UNKNOWN)
@@ -196,6 +202,7 @@ class MainActivity : AppCompatActivity() {
         // 5. 设置各种按钮点击事件
         setupLensButtons()
         setupWaypointButtons()
+        setupResolutionButton() // ★ 初始化分辨率切换按钮功能
 
         // 新增的视觉降落与起飞检查点击事件
         btnAutoLanding?.setOnClickListener { onLandingClicked() }
@@ -547,6 +554,9 @@ class MainActivity : AppCompatActivity() {
         // 新增的视觉降落与起飞按钮
         btnAutoLanding = findViewById(R.id.btnAutoLanding)
         btnTakeoff     = findViewById(R.id.btnTakeoff)
+
+        // ★ 新增：绑定分辨率切换按钮
+        btnSwitchRes   = findViewById(R.id.btnSwitchRes)
     }
 
     private fun showErrorOnUI(msg: String) {
@@ -570,7 +580,6 @@ class MainActivity : AppCompatActivity() {
         ).forEach { id -> findViewById<View>(id)?.let { reattachView(it) } }
         Log.d(TAG_SDK, "完成")
     }
-
     private fun reattachView(view: View) {
         val parent = view.parent as? ViewGroup ?: return
         val index  = parent.indexOfChild(view)
@@ -589,6 +598,49 @@ class MainActivity : AppCompatActivity() {
         btnRecordWaypoint.setOnClickListener { waypointCtrl.recordWaypoint() }
         btnSaveWaypoints.setOnClickListener  { waypointCtrl.saveWaypoints() }
         btnClearWaypoints.setOnClickListener { waypointCtrl.clearWaypoints() }
+    }
+
+    // ★ 新增：配置分辨率切换按钮逻辑
+    private fun setupResolutionButton() {
+        btnSwitchRes.text = if (is4K) "分辨率: 4K" else "分辨率: 1080P"
+
+        btnSwitchRes.setOnClickListener {
+            // 如果还没初始化控制器，先初始化
+            if (testCameraController == null) {
+                ensureVisionSystemReady()
+            }
+
+            // 确定目标分辨率
+            val targetRes = if (is4K) {
+                DroneCommProtocol.CAM_RES_1920X1080 // 从 4K 切到 1080P
+            } else {
+                DroneCommProtocol.CAM_RES_3840X2160 // 从 1080P 切到 4K
+            }
+
+            // 获取当前实际被激活的镜头 (利用我们之前在 Service 里的解耦逻辑)
+            val currentLens = DroneControlService.currentLensCode
+            // 帧率固定下发 30fps，保持日常使用流畅度
+            val targetFps = DroneCommProtocol.CAM_FPS_30
+
+            btnSwitchRes.isEnabled = false // 防抖动
+            btnSwitchRes.text = "切换中..."
+
+            testCameraController?.setVideoCfg(currentLens, targetRes, targetFps) { success, msg ->
+                runOnUiThread {
+                    btnSwitchRes.isEnabled = true
+                    if (success) {
+                        is4K = !is4K
+                        val resName = if (is4K) "4K" else "1080P"
+                        btnSwitchRes.text = "分辨率: $resName"
+                        Toast.makeText(this, "成功切换到 $resName", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val resName = if (is4K) "4K" else "1080P" // 还原原有文字状态
+                        btnSwitchRes.text = "分辨率: $resName"
+                        Toast.makeText(this, "切换失败: $msg", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
     }
 
     private fun switchLens(target: CameraVideoStreamSourceType) {

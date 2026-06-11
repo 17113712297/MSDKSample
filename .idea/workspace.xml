@@ -17,14 +17,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="2145581a-3e18-44cd-94c6-ac0803a6997b" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_469_timing.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/build.gradle" beforeDir="false" afterPath="$PROJECT_DIR$/app/build.gradle" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/LandingController.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/LandingController.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/CameraController.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/CameraController.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/DroneControlService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/DroneControlService.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/MainActivity.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/MainActivity.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/src/main/res/layout/activity_main.xml" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/res/layout/activity_main.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/arm64-v8a/configure_fingerprint.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/arm64-v8a/configure_fingerprint.bin" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/x86/configure_fingerprint.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/x86/configure_fingerprint.bin" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/opencv/build.gradle" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build.gradle" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_455_timing.txt" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_455_timing.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/x86/generate_cxx_metadata_55_timing.txt" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/x86/generate_cxx_metadata_55_timing.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/cacheable/last-build.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/cacheable/last-build.bin" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/local-state/build-history.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/local-state/build-history.bin" afterDir="false" />
@@ -241,12 +242,12 @@
       <map>
         <entry key="com.example.msdksample">
           <value>
-            <CheckInfo lastCheckTimestamp="1780283826252" />
+            <CheckInfo lastCheckTimestamp="1781166842300" />
           </value>
         </entry>
         <entry key="com.example.msdksample.test">
           <value>
-            <CheckInfo lastCheckTimestamp="1780283826250" />
+            <CheckInfo lastCheckTimestamp="1781166842300" />
           </value>
         </entry>
       </map>
