@@ -133,7 +133,7 @@ class LandingController {
     @Volatile private var lastCmdSendTime = 0L
     private var watchdogTimer: Timer? = null
 
-    // ★ 修复：将 Runnable 定义提前，防止 init 块中调用时报未初始化错误
+    // 将 Runnable 定义提前，防止 init 块中调用时报未初始化错误
     private val flightControlRunnable = object : Runnable {
         override fun run() {
             if (taskStateRef.get() != TaskState.LANDING) return
@@ -185,7 +185,7 @@ class LandingController {
         controlThread.start()
         controlHandler = Handler(controlThread.looper)
 
-        // 注册遥测与控制循环 (现在可以安全调用了)
+        // 注册遥测与控制循环
         controlHandler.post(telemetryRunnable)
 
         // 注册飞行模式监听
@@ -433,18 +433,32 @@ class LandingController {
                         val allowedErr = max(0.10, height * 0.15)
                         val alignFactor = ((allowedErr - radialErr) / allowedErr).coerceIn(0.0, 1.0)
                         val currentVelZUp = -state.velZ
-                        val desiredVelZ = if (alignFactor < 0.1) 0.0 else {
-                            val minSpeed = if (height < 1.0) 0.10 else 0.15
-                            val rawSpeed = max(minSpeed, height * 0.20) * alignFactor
+
+                        // ⭐【核心自适应重构】：判定是否进入超低空迫降空域（适配10cm高支架+物理反弹误差）
+                        val isSuperLowAlt = height < 0.25
+
+                        val desiredVelZ = if (alignFactor < 0.1 && !isSuperLowAlt) {
+                            0.0 // 高空未对准时可以悬停等待
+                        } else {
+                            // 进入超低空迫降区后，不再受 alignFactor 惩罚项制约，强制给予下压速度对抗地面效应
+                            val minSpeed = if (height < 1.0) 0.12 else 0.15
+                            val rawSpeed = max(minSpeed, height * 0.20) * (if (isSuperLowAlt) 1.0 else alignFactor)
                             (-rawSpeed).coerceIn(MAX_DESCEND_VEL, MIN_DESCEND_VEL)
                         }
 
                         tThrottle = desiredVelZ + KP_Z_VEL * (desiredVelZ - currentVelZUp)
 
-                        if (desiredVelZ < -0.1 && abs(currentVelZUp) < 0.05 && height < 1.0) touchdownFrames++ else touchdownFrames = 0
+                        // ⭐【核心自适应重构】：放宽超低空触地帧计数器的前置切入条件，防止速度死锁清零
+                        if ((desiredVelZ < -0.1 || isSuperLowAlt) && abs(currentVelZUp) < 0.05 && height < 1.0) {
+                            touchdownFrames++
+                        } else {
+                            touchdownFrames = 0
+                        }
 
-                        if (height in 0.01..0.30 || touchdownFrames > 15) {
-                            triggerFinalLanding(); return
+                        // ⭐【核心自适应重构】：双保底强制盲降。高度低于0.22米（支架触地后传感器极限）或连续压实12帧，立即切断停桨
+                        if (height in 0.01..0.22 || touchdownFrames > 12) {
+                            triggerFinalLanding()
+                            return
                         }
                     }
                     else -> {}
@@ -452,7 +466,7 @@ class LandingController {
             }
         }
 
-        // 我们之前已经移除了 EMA，这里仅做纯粹的加速度限幅，不影响向前的数学证明
+        // 仅做纯粹的加速度限幅，不影响向前的数学证明
         cmdPitch    = accelLimit(cmdPitch, tPitch, MAX_XY_ACCEL)
         cmdRoll     = accelLimit(cmdRoll, tRoll, MAX_XY_ACCEL)
         cmdYaw      = accelLimit(cmdYaw, tYaw, MAX_YAW_ACCEL)
