@@ -49,7 +49,7 @@ class LandingController {
     }
 
     // =========================================================================
-    // 对外暴露的回调接口 (UI 层只需监听这些回调)
+    // 对外暴露的回调接口
     // =========================================================================
     var onTaskStateChanged: ((TaskState) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
@@ -58,7 +58,6 @@ class LandingController {
     var onYawRateUpdate: ((yawRate: Double) -> Unit)? = null
     var onBatteryUpdate: ((pct: Int) -> Unit)? = null
 
-    // 当前使用的相机索引（云台控制需要）
     var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 
     // =========================================================================
@@ -99,6 +98,24 @@ class LandingController {
     private var lastValidVisionTimeMs = 0L
     private var lastAlignYawLogTime = 0L
 
+    // 追踪进入最终阶段和超声波丢帧的绝对生命周期
+    @Volatile private var enterLandingStateTimeMs = 0L
+    private var ultrasonicInvalidFrameCount = 0
+
+    @Volatile private var lastKnownFlightMode: String = ""
+    private val flightModeListener = object : CommonCallbacks.KeyListener<FlightMode> {
+        override fun onValueChange(oldValue: FlightMode?, newValue: FlightMode?) {
+            val name = newValue?.name ?: ""
+            lastKnownFlightMode = name
+            if (taskStateRef.get() == TaskState.LANDING && name.isNotEmpty()) {
+                if (!isAllowedFlightMode(name)) {
+                    Log.w(TAG, "🛑 检测到非白名单模式 ($name),判定为飞手接管")
+                    stopMission("飞手切挡接管 ($name)")
+                }
+            }
+        }
+    }
+
     // 控制参数
     private val KP_XY           = 0.8
     private val KP_YAW          = 0.5
@@ -120,20 +137,16 @@ class LandingController {
     private var cmdThrottle = 0.0
     private var touchdownFrames = 0
 
-    // 测距与 UI 相关
     private var lastUiYawDeg  = Double.NaN
     private var lastUiYawTime = 0L
 
-    // =========================================================================
-    // 线程、Runnable 与看门狗 (已修复初始化顺序)
-    // =========================================================================
+    // 线程、Runnable 与看门狗
     private val controlThread = HandlerThread("FlightControlThread", android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
     private val controlHandler: Handler
 
     @Volatile private var lastCmdSendTime = 0L
     private var watchdogTimer: Timer? = null
 
-    // 将 Runnable 定义提前，防止 init 块中调用时报未初始化错误
     private val flightControlRunnable = object : Runnable {
         override fun run() {
             if (taskStateRef.get() != TaskState.LANDING) return
@@ -162,33 +175,12 @@ class LandingController {
     }
 
     // =========================================================================
-    // 飞行模式监听器 (防抢夺)
-    // =========================================================================
-    @Volatile private var lastKnownFlightMode: String = ""
-    private val flightModeListener = object : CommonCallbacks.KeyListener<FlightMode> {
-        override fun onValueChange(oldValue: FlightMode?, newValue: FlightMode?) {
-            val name = newValue?.name ?: ""
-            lastKnownFlightMode = name
-            if (taskStateRef.get() == TaskState.LANDING && name.isNotEmpty()) {
-                if (!isAllowedFlightMode(name)) {
-                    Log.w(TAG, "🛑 检测到非白名单模式 ($name),判定为飞手接管")
-                    stopMission("飞手切挡接管 ($name)")
-                }
-            }
-        }
-    }
-
-    // =========================================================================
     // 初始化块
     // =========================================================================
     init {
         controlThread.start()
         controlHandler = Handler(controlThread.looper)
-
-        // 注册遥测与控制循环
         controlHandler.post(telemetryRunnable)
-
-        // 注册飞行模式监听
         runCatching {
             KeyManager.getInstance().listen(KeyTools.createKey(FlightControllerKey.KeyFlightMode), this, flightModeListener)
         }
@@ -268,6 +260,7 @@ class LandingController {
         stopWatchdog()
         isVirtualStickActive = false
         landingStartTimeMs = 0L
+        enterLandingStateTimeMs = 0L
 
         onTaskStateChanged?.invoke(TaskState.INACTIVE)
         onMessage?.invoke("🔴 已退出: $reason")
@@ -290,9 +283,6 @@ class LandingController {
         controlThread.quitSafely()
     }
 
-    // =========================================================================
-    // 内部控制逻辑
-    // =========================================================================
     private fun setTaskState(newState: TaskState) {
         taskStateRef.set(newState)
         onTaskStateChanged?.invoke(newState)
@@ -315,6 +305,8 @@ class LandingController {
         visionRef.set(VisionMeasurement())
         validVisionFrameCount = 0
         lastValidVisionTimeMs = 0L
+        enterLandingStateTimeMs = 0L
+        ultrasonicInvalidFrameCount = 0
     }
 
     private fun triggerFinalLanding() {
@@ -388,9 +380,11 @@ class LandingController {
                         if (now - alignYawStartTimeMs > ALIGN_YAW_TIMEOUT_MS) {
                             targetLockedYaw = state.yaw
                             missionState = MissionState.LANDING
+                            enterLandingStateTimeMs = now
                         } else if (!v.yawDeg.isNaN() && abs(v.yawDeg) < ALIGN_YAW_THRESHOLD_DEG) {
                             targetLockedYaw = state.yaw
                             missionState = MissionState.LANDING
+                            enterLandingStateTimeMs = now
                         } else if (!v.yawDeg.isNaN()) {
                             val rawYaw = KP_YAW * v.yawDeg
                             tYaw = if (abs(rawYaw) < MIN_YAW_VEL) (if (rawYaw > 0) MIN_YAW_VEL else -MIN_YAW_VEL) else rawYaw.coerceIn(-MAX_YAW_VEL, MAX_YAW_VEL)
@@ -398,6 +392,8 @@ class LandingController {
                         if (now - lastAlignYawLogTime > 200L) { lastAlignYawLogTime = now; Log.d(TAG, "🧭 ALIGN_YAW tYaw=${tYaw}") }
                     }
                     MissionState.LANDING -> {
+                        if (enterLandingStateTimeMs == 0L) enterLandingStateTimeMs = now
+
                         if (targetLockedYaw.isNaN()) targetLockedYaw = state.yaw
 
                         var yawErr = state.yaw - targetLockedYaw
@@ -410,7 +406,6 @@ class LandingController {
                         val errForwardCG = -v.errY + CAMERA_OFFSET_FORWARD
                         val errRightCG   = v.errX + CAMERA_OFFSET_RIGHT
 
-                        // 轴互换
                         var pPitch = KP_XY * errRightCG
                         var pRoll  = KP_XY * errForwardCG
 
@@ -421,12 +416,14 @@ class LandingController {
 
                         tPitch = pPitch; tRoll = pRoll
 
-                        val ultraOk = state.ultrasonicHeight in 0.01..10.0
+                        // 第一道防线：交叉校验抗数据冻结
+                        val useUltra = state.ultrasonicHeight in 0.01..10.0 && ultrasonicInvalidFrameCount < 10
                         val depthOk = !v.depthZ.isNaN() && v.depthZ in 0.01..20.0
+
                         val height = when {
-                            ultraOk -> state.ultrasonicHeight
+                            useUltra -> state.ultrasonicHeight
                             depthOk -> v.depthZ
-                            else -> { stopMission("高度数据全部失效"); return }
+                            else -> state.altitude
                         }
 
                         val radialErr = hypot(v.errX, v.errY)
@@ -434,13 +431,18 @@ class LandingController {
                         val alignFactor = ((allowedErr - radialErr) / allowedErr).coerceIn(0.0, 1.0)
                         val currentVelZUp = -state.velZ
 
-                        // ⭐【核心自适应重构】：判定是否进入超低空迫降空域（适配10cm高支架+物理反弹误差）
-                        val isSuperLowAlt = height < 0.25
+                        // ─── 物理语义硬参配置 ───
+                        val H_NEST    = 0.10
+                        val H_BRACKET = 0.08
+                        val H_LIMIT   = H_NEST + H_BRACKET
+
+                        // 软件判定线：比物理极限高出 7cm（即 0.25米）
+                        val superLowThreshold = H_LIMIT + 0.07
+                        val isSuperLowAlt = height < superLowThreshold
 
                         val desiredVelZ = if (alignFactor < 0.1 && !isSuperLowAlt) {
-                            0.0 // 高空未对准时可以悬停等待
+                            0.0
                         } else {
-                            // 进入超低空迫降区后，不再受 alignFactor 惩罚项制约，强制给予下压速度对抗地面效应
                             val minSpeed = if (height < 1.0) 0.12 else 0.15
                             val rawSpeed = max(minSpeed, height * 0.20) * (if (isSuperLowAlt) 1.0 else alignFactor)
                             (-rawSpeed).coerceIn(MAX_DESCEND_VEL, MIN_DESCEND_VEL)
@@ -448,15 +450,23 @@ class LandingController {
 
                         tThrottle = desiredVelZ + KP_Z_VEL * (desiredVelZ - currentVelZUp)
 
-                        // ⭐【核心自适应重构】：放宽超低空触地帧计数器的前置切入条件，防止速度死锁清零
-                        if ((desiredVelZ < -0.1 || isSuperLowAlt) && abs(currentVelZUp) < 0.05 && height < 1.0) {
+                        // 第二道防线：放宽超低空速度轴向容忍度，对抗地效杂波
+                        val maxVelocityNoise = if (isSuperLowAlt) 0.18 else 0.05
+                        if ((desiredVelZ < -0.1 || isSuperLowAlt) && abs(currentVelZUp) < maxVelocityNoise && height < 1.0) {
                             touchdownFrames++
                         } else {
                             touchdownFrames = 0
                         }
 
-                        // ⭐【核心自适应重构】：双保底强制盲降。高度低于0.22米（支架触地后传感器极限）或连续压实12帧，立即切断停桨
-                        if (height in 0.01..0.22 || touchdownFrames > 12) {
+                        // 第三道防线：绝对时间强力迫降 + 强制盲降线
+                        val timeInLandingStateMs = if (enterLandingStateTimeMs > 0L) now - enterLandingStateTimeMs else 0L
+                        val isTimeoutForceLand = timeInLandingStateMs > 3500L && height < 0.50
+
+                        // ⭐ 第四道防线（终极绝杀）：绝对硬超时 12秒，彻底无视任何高度传感器数据，强行底层闭合停桨
+                        val isHardTimeout = timeInLandingStateMs > 12_000L
+
+                        if (height <= (H_LIMIT + 0.03) || touchdownFrames > 10 || isTimeoutForceLand || isHardTimeout) {
+                            Log.w(TAG, "🎯 [触地停桨闭合] 测高:${height}m, 盲降线:${H_LIMIT + 0.03}m, 帧数:${touchdownFrames}, 超时锁:${isTimeoutForceLand}, 终极硬超时:${isHardTimeout}")
                             triggerFinalLanding()
                             return
                         }
@@ -466,7 +476,6 @@ class LandingController {
             }
         }
 
-        // 仅做纯粹的加速度限幅，不影响向前的数学证明
         cmdPitch    = accelLimit(cmdPitch, tPitch, MAX_XY_ACCEL)
         cmdRoll     = accelLimit(cmdRoll, tRoll, MAX_XY_ACCEL)
         cmdYaw      = accelLimit(cmdYaw, tYaw, MAX_YAW_ACCEL)
@@ -490,9 +499,6 @@ class LandingController {
         return current + (target - current).coerceIn(-maxDelta, maxDelta)
     }
 
-    // =========================================================================
-    // 状态拉取、看门狗与云台
-    // =========================================================================
     private fun pollFlightStatusSync() {
         runCatching {
             val km = KeyManager.getInstance()
@@ -504,6 +510,13 @@ class LandingController {
             val vel = km.getValue(KeyTools.createKey(FlightControllerKey.KeyAircraftVelocity))
             val mode = km.getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name
             if (!mode.isNullOrEmpty()) lastKnownFlightMode = mode
+
+            // 维护超声波无效帧计数器
+            if (ultra == null || ultra <= 0.0) {
+                ultrasonicInvalidFrameCount = min(ultrasonicInvalidFrameCount + 1, 20)
+            } else {
+                ultrasonicInvalidFrameCount = 0
+            }
 
             aircraftStateRef.set(AircraftState(
                 isFlying = isFlying, altitude = alt,
