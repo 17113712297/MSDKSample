@@ -462,8 +462,8 @@ class LandingController {
                         val timeInLandingStateMs = if (enterLandingStateTimeMs > 0L) now - enterLandingStateTimeMs else 0L
                         val isTimeoutForceLand = timeInLandingStateMs > 3500L && height < 0.50
 
-                        // ⭐ 第四道防线（终极绝杀）：绝对硬超时 12秒，彻底无视任何高度传感器数据，强行底层闭合停桨
-                        val isHardTimeout = timeInLandingStateMs > 12_000L
+                        // ⭐ 第四道防线（终极绝杀）：绝对硬超时 15秒，彻底无视任何高度传感器数据，强行底层闭合停桨
+                        val isHardTimeout = timeInLandingStateMs > 15_000L
 
                         if (height <= (H_LIMIT + 0.03) || touchdownFrames > 10 || isTimeoutForceLand || isHardTimeout) {
                             Log.w(TAG, "🎯 [触地停桨闭合] 测高:${height}m, 盲降线:${H_LIMIT + 0.03}m, 帧数:${touchdownFrames}, 超时锁:${isTimeoutForceLand}, 终极硬超时:${isHardTimeout}")
