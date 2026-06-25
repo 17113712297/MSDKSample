@@ -1,6 +1,7 @@
 package com.example.msdksample
 
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -8,6 +9,8 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -41,70 +44,70 @@ import java.util.concurrent.TimeUnit
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        const val TAG            = "DBG_CAM"
-        const val TAG_SDK        = "DBG_SDK"
+        const val TAG = "DBG_CAM"
+        const val TAG_SDK = "DBG_SDK"
         const val REATTACH_DELAY = 3_000L
-        const val POLL_INTERVAL  = 500L
+        const val POLL_INTERVAL = 500L
+        const val AUTO_STREAM_RETRY_DELAY_MS = 3_000L
+        const val AUTO_STREAM_MAX_ATTEMPTS = 10
     }
 
-    // ── 相机相关 Widget ──────────────────────────────────────────────
     private lateinit var fpvWidget: FPVWidget
     private lateinit var shootPhotoWidget: ShootPhotoWidget
     private lateinit var recordVideoWidget: RecordVideoWidget
     private lateinit var focalZoomWidget: FocalZoomWidget
     private lateinit var photoVideoSwitchWidget: PhotoVideoSwitchWidget
 
-    // 镜头切换按钮
     private lateinit var btnLensWide: Button
     private lateinit var btnLensZoom: Button
     private lateinit var btnLensThermal: Button
+    private lateinit var btnLiveStreamPanel: Button
+    private lateinit var btnLiveStreamAction: Button
 
-    // 航点记录按钮 (保留原有功能)
     private lateinit var btnRecordWaypoint: Button
     private lateinit var btnSaveWaypoints: Button
     private lateinit var btnClearWaypoints: Button
 
-    // 新增：视觉/预检按钮 (来自代码段2)
     private var btnAutoLanding: Button? = null
     private var btnTakeoff: Button? = null
 
-    // ★ 新增：切换分辨率按钮
-    private lateinit var btnSwitchRes: Button
-
-    // ── 左侧 HUD TextView ────────────────────────────────────────────
     private lateinit var xSpeedText: TextView
     private lateinit var ySpeedText: TextView
     private lateinit var zSpeedText: TextView
     private lateinit var yawRateText: TextView
     private lateinit var remainingTimeText: TextView
+    private lateinit var liveStreamLayout: LinearLayout
+    private lateinit var liveStreamAddressText: TextView
+    private lateinit var liveStreamStatusText: TextView
+    private lateinit var liveStreamAddressInput: EditText
+    private lateinit var btnLiveStreamSave: Button
 
-    // ── 状态管理 ───────────────────────────────────────────
     private var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
-
-    // ★ 新增：记录当前分辨率状态（默认设为 4K）
-    private var is4K = true
 
     private val cameraSourceProcessor = DataProcessor.create(
         Pair(ComponentIndexType.UNKNOWN, CameraLensType.UNKNOWN)
     )
     private var compositeDisposable: CompositeDisposable? = null
 
-    private var lastYawDeg    = Double.NaN
+    private var lastYawDeg = Double.NaN
     private var lastYawTimeMs = 0L
     private val waypointCtrl = WaypointController()
 
-    // ── 新增：核心视觉与控制组件 ─────────────────────────────────────────
     private var testCameraController: CameraController? = null
     private var visionController: VisionController? = null
+    private lateinit var liveStreamController: LiveStreamController
     private lateinit var landingController: LandingController
     private lateinit var preflightController: PreflightController
     @Volatile private var currentTargetId = -1
-
-    // ── 新增：跟踪降落状态以检测 LANDING→INACTIVE 完成信号 ──
     @Volatile private var previousLandingState: TaskState = TaskState.INACTIVE
 
-    // ── 轮询 Handler (保留原有功能) ─────────────────────────────────────────────────
-    private val pollHandler  = Handler(Looper.getMainLooper())
+    private var autoStreamAttemptCount = 0
+    private var autoStreamAwaitingResult = false
+    private var autoStreamStopped = false
+    private var liveStreamTouchedByUser = false
+    private var isLiveStreamPanelVisible = false
+
+    private val pollHandler = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
         override fun run() {
             pollVelocity()
@@ -113,21 +116,28 @@ class MainActivity : AppCompatActivity() {
             pollHandler.postDelayed(this, POLL_INTERVAL)
         }
     }
+    private val autoStartLiveStreamRunnable = Runnable {
+        attemptAutoStartLiveStream()
+    }
 
-    // ── 相机流可用性监听器 (合并两者逻辑) ────────────────────────────────────────────
     private val availableCameraUpdatedListener =
         object : ICameraStreamManager.AvailableCameraUpdatedListener {
             override fun onAvailableCameraUpdated(list: MutableList<ComponentIndexType>) {
                 Log.d(TAG, "onAvailableCameraUpdated: $list")
                 runOnUiThread {
                     if (list.isNullOrEmpty()) return@runOnUiThread
-                    val source = if (list.contains(ComponentIndexType.LEFT_OR_MAIN))
-                        ComponentIndexType.LEFT_OR_MAIN else list[0]
+                    val source = if (list.contains(ComponentIndexType.LEFT_OR_MAIN)) {
+                        ComponentIndexType.LEFT_OR_MAIN
+                    } else {
+                        list[0]
+                    }
 
                     currentCameraIndex = source
                     fpvWidget.updateVideoSource(source)
-
-                    // ★ 将源同步给新加入的控制器
+                    if (::liveStreamController.isInitialized) {
+                        liveStreamController.updateLiveStreamCameraSource(source)
+                        liveStreamController.refreshConfiguredStreamAddress()
+                    }
                     if (::landingController.isInitialized) {
                         landingController.currentCameraIndex = source
                     }
@@ -136,58 +146,36 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-            override fun onCameraStreamEnableUpdate(map: MutableMap<ComponentIndexType, Boolean>) {}
+
+            override fun onCameraStreamEnableUpdate(map: MutableMap<ComponentIndexType, Boolean>) = Unit
         }
 
-    // ── 生命周期 ──────────────────────────────────────────────────────
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 1. 初始化 OpenCV
         Thread {
             val ok = OpenCVLoader.initDebug()
             Log.i(TAG, "OpenCV init: $ok")
         }.start()
 
         setContentView(R.layout.activity_main)
-
-        // 2. 绑定已有与新增的 UI 组件
         initUIWidgets()
 
-        // 3. ★ 初始化新增的控制器（带安全保护）
         try {
             landingController = LandingController()
             preflightController = PreflightController()
+            liveStreamController = LiveStreamController(this)
             setupControllerCallbacks()
-
-            // 注入控制器引用给 Service
+            setupLiveStreamController()
             DroneControlService.preflightController = preflightController
             DroneControlService.landingController = landingController
-
-            // ★ 新增：注入开启与关闭相机流的闭包
-            DroneControlService.onStartCameraStream = {
-                runOnUiThread { // 确保在主线程初始化 UI 强相关的视觉组件
-                    ensureVisionSystemReady()
-                    visionController?.resetTracking() // PSDK 触发视觉降落也需要重置追踪
-                    testCameraController?.startVideoStream()
-                }
-            }
-            DroneControlService.onResetVisionTracking = {
-                visionController?.resetTracking()
-            }
-            DroneControlService.onStopCameraStream = {
-                runCatching { testCameraController?.stopVideoStream() }
-            }
-
         } catch (e: Exception) {
-            Log.e(TAG, "⚠️ 控制器初始化失败 (SDK可能未就绪或未连接飞机)", e)
-            showErrorOnUI("控制器初始化失败，请确保飞机已连接！")
+            Log.e(TAG, "Controller init failed", e)
+            showErrorOnUI("控制器初始化失败，请确保飞机已连接")
         }
 
-        // 4. 设置相机数据流监听
         fpvWidget.isCameraSourceNameVisible = false
         fpvWidget.isCameraSourceSideVisible = false
-
         fpvWidget.setOnFPVStreamSourceListener(object : FPVStreamSourceListener {
             override fun onStreamSourceUpdated(pos: ComponentIndexType, lens: CameraLensType) {
                 Log.d(TAG, "onStreamSourceUpdated: pos=$pos lens=$lens")
@@ -199,16 +187,13 @@ class MainActivity : AppCompatActivity() {
             .getCameraStreamManager()
             .addAvailableCameraUpdatedListener(availableCameraUpdatedListener)
 
-        // 5. 设置各种按钮点击事件
         setupLensButtons()
         setupWaypointButtons()
-        setupResolutionButton() // ★ 初始化分辨率切换按钮功能
+        setupLiveStreamButton()
 
-        // 新增的视觉降落与起飞检查点击事件
         btnAutoLanding?.setOnClickListener { onLandingClicked() }
         btnTakeoff?.setOnClickListener { onTakeoffClicked() }
 
-        // 6. 挂载系统状态Widget并启动服务
         window.decorView.postDelayed({ reattachStatusWidgets() }, REATTACH_DELAY)
         runCatching {
             ContextCompat.startForegroundService(this, Intent(this, DroneControlService::class.java))
@@ -217,6 +202,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (::liveStreamController.isInitialized) {
+            liveStreamController.bind()
+            liveStreamController.updateLiveStreamCameraSource(currentCameraIndex)
+            liveStreamController.refreshConfiguredStreamAddress()
+            scheduleAutoStartLiveStream()
+        }
+
         compositeDisposable = CompositeDisposable()
         compositeDisposable?.add(
             cameraSourceProcessor.toFlowable()
@@ -228,38 +220,42 @@ class MainActivity : AppCompatActivity() {
                             updateViewVisibility(lens)
                             updateAllWidgetSource(pos, lens)
                             updateLensButtonState(lens)
-                            // 保持原有的服务同步逻辑
                             DroneControlService.updateCurrentLens(lensTypeToCode(lens))
                         }
                     },
-                    { e -> Log.e(TAG, "cameraSource 错误: ${e.message}") }
+                    { e -> Log.e(TAG, "cameraSource error: ${e.message}") }
                 )
         )
-        // 恢复原有轮询
         pollHandler.post(pollRunnable)
     }
 
     override fun onPause() {
         super.onPause()
         pollHandler.removeCallbacks(pollRunnable)
+        pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
         compositeDisposable?.dispose()
         compositeDisposable = null
+        if (::liveStreamController.isInitialized && liveStreamController.isStreaming()) {
+            liveStreamController.stopStreamIfNeeded()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
         MediaDataCenter.getInstance()
             .getCameraStreamManager()
             .removeAvailableCameraUpdatedListener(availableCameraUpdatedListener)
-
-        // 释放新增控制器资源
+        if (::liveStreamController.isInitialized) {
+            liveStreamController.stopStreamIfNeeded()
+            liveStreamController.release()
+        }
         if (::landingController.isInitialized) landingController.release()
         if (::preflightController.isInitialized) preflightController.release()
         visionController?.release()
         runCatching { testCameraController?.stopVideoStream() }
     }
 
-    // ── HUD 轮询相关 (保持原样) ───────────────────────────────────────
     private fun pollVelocity() {
         try {
             KeyManager.getInstance().getValue(
@@ -273,14 +269,15 @@ class MainActivity : AppCompatActivity() {
                             zSpeedText.text = "%+.2f m/s".format(value.z)
                         }
                     }
-                    override fun onFailure(error: IDJIError) {}
+
+                    override fun onFailure(error: IDJIError) = Unit
                 }
             )
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     private fun pollYawRate() {
-        // 如果处于检查状态，暂停用轮询数据覆盖UI文字 (避免遮盖 "✅ 检查完毕" 等提示)
         if (::preflightController.isInitialized && preflightController.isChecking) return
 
         try {
@@ -289,30 +286,32 @@ class MainActivity : AppCompatActivity() {
                 object : CommonCallbacks.CompletionCallbackWithParam<Attitude> {
                     override fun onSuccess(value: Attitude?) {
                         value ?: return
-                        val nowMs  = System.currentTimeMillis()
+                        val nowMs = System.currentTimeMillis()
                         val yawNow = value.yaw
                         if (!lastYawDeg.isNaN() && lastYawTimeMs > 0) {
                             val dtSec = (nowMs - lastYawTimeMs) / 1000.0
                             if (dtSec > 0.05) {
                                 var delta = yawNow - lastYawDeg
-                                if (delta >  180.0) delta -= 360.0
+                                if (delta > 180.0) delta -= 360.0
                                 if (delta < -180.0) delta += 360.0
                                 runOnUiThread {
-                                    // 若检测到UI被置为错误提示颜色，则暂时不覆盖
                                     if (yawRateText.currentTextColor != 0xFFD32F2F.toInt() &&
-                                        yawRateText.currentTextColor != 0xFF4CAF50.toInt()) {
+                                        yawRateText.currentTextColor != 0xFF4CAF50.toInt()
+                                    ) {
                                         yawRateText.text = "%+.1f °/s".format(delta / dtSec)
                                     }
                                 }
                             }
                         }
-                        lastYawDeg    = yawNow
+                        lastYawDeg = yawNow
                         lastYawTimeMs = nowMs
                     }
-                    override fun onFailure(error: IDJIError) {}
+
+                    override fun onFailure(error: IDJIError) = Unit
                 }
             )
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     private fun pollRemainingFlightTime() {
@@ -325,14 +324,15 @@ class MainActivity : AppCompatActivity() {
                         val sec = value.remainingFlightTime
                         runOnUiThread {
                             remainingTimeText.text =
-                                if (sec > 0) "%d:%02d".format(sec / 60, sec % 60)
-                                else "--:--"
+                                if (sec > 0) "%d:%02d".format(sec / 60, sec % 60) else "--:--"
                         }
                     }
-                    override fun onFailure(error: IDJIError) {}
+
+                    override fun onFailure(error: IDJIError) = Unit
                 }
             )
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     private fun setupControllerCallbacks() {
@@ -345,14 +345,16 @@ class MainActivity : AppCompatActivity() {
                         btnAutoLanding?.isEnabled = true
                         btnTakeoff?.isEnabled = true
                     }
+
                     TaskState.LANDING_PREP -> {
                         btnAutoLanding?.text = "准备中..."
                         btnAutoLanding?.setBackgroundColor(0xFFFF9800.toInt())
                         btnAutoLanding?.isEnabled = false
                         btnTakeoff?.isEnabled = false
                     }
+
                     TaskState.LANDING -> {
-                        btnAutoLanding?.text = "中止降落!"
+                        btnAutoLanding?.text = "中止降落"
                         btnAutoLanding?.setBackgroundColor(0xFF4CAF50.toInt())
                         btnAutoLanding?.isEnabled = true
                         btnTakeoff?.isEnabled = false
@@ -361,16 +363,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-
-            // ═════════════════════════════════════════════════
-            // ★ 新增：降落完成时关闭视频流并通知 Jetson
-            // ═════════════════════════════════════════════════
             if (state == TaskState.INACTIVE && previousLandingState == TaskState.LANDING) {
                 previousLandingState = TaskState.INACTIVE
-
-                // ★ 新增：关闭视频流
-                DroneControlService.onStopCameraStream?.invoke()
-
                 runCatching {
                     val frame = DroneCommProtocol.encodeSimple(
                         DroneCommProtocol.CMD_ACK_LAND_COMPLETE
@@ -400,16 +394,11 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 btnTakeoff?.isEnabled = true
                 btnTakeoff?.text = "检查通过"
-                yawRateText.text = "✅ 检查完毕，可以起飞"
+                yawRateText.text = "检查完毕，可以起飞"
                 yawRateText.setTextColor(0xFF4CAF50.toInt())
                 yawRateText.textSize = 14f
-                Toast.makeText(this, "✅ 安全检查通过", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "安全检查通过", Toast.LENGTH_LONG).show()
             }
-
-            // ★ 新增：自检通过后关闭视频流
-            DroneControlService.onStopCameraStream?.invoke()
-
-            // 通知 Jetson 检查通过
             runCatching {
                 val frame = DroneCommProtocol.encodeSimple(
                     DroneCommProtocol.CMD_ACK_CHECK_PASSED
@@ -424,26 +413,21 @@ class MainActivity : AppCompatActivity() {
                 btnTakeoff?.text = "重新检查"
                 showErrorOnUI(reason)
             }
-
-            // ★ 新增：自检失败后关闭视频流
-            DroneControlService.onStopCameraStream?.invoke()
-
-            // 通知 Jetson 检查失败（带原因码）
             runCatching {
                 val reasonCode: Byte = when {
                     reason.contains("夹爪", ignoreCase = true) ||
-                            reason.contains("grip", ignoreCase = true) ||
-                            reason.contains("遮挡", ignoreCase = true)
-                        -> DroneCommProtocol.CHECK_FAIL_REASON_GRIP_NOT_DETECTED
+                        reason.contains("grip", ignoreCase = true) ||
+                        reason.contains("遮挡", ignoreCase = true) ->
+                        DroneCommProtocol.CHECK_FAIL_REASON_GRIP_NOT_DETECTED
 
                     reason.contains("cv", ignoreCase = true) ||
-                            reason.contains("vision", ignoreCase = true) ||
-                            reason.contains("视觉", ignoreCase = true)
-                        -> DroneCommProtocol.CHECK_FAIL_REASON_CV_ERROR
+                        reason.contains("vision", ignoreCase = true) ||
+                        reason.contains("视觉", ignoreCase = true) ->
+                        DroneCommProtocol.CHECK_FAIL_REASON_CV_ERROR
 
                     reason.contains("云台", ignoreCase = true) ||
-                            reason.contains("gimbal", ignoreCase = true)
-                        -> DroneCommProtocol.CHECK_FAIL_REASON_GIMBAL_ERROR
+                        reason.contains("gimbal", ignoreCase = true) ->
+                        DroneCommProtocol.CHECK_FAIL_REASON_GIMBAL_ERROR
 
                     else -> DroneCommProtocol.CHECK_FAIL_REASON_UNKNOWN
                 }
@@ -456,13 +440,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
     private fun ensureVisionSystemReady() {
         if (testCameraController != null) return
 
         try {
             testCameraController = CameraController(currentCameraIndex)
-            visionController     = VisionController()
+            visionController = VisionController()
 
             visionController?.onTargetLocked = { id, errX, errY, depthZ, yawDeg ->
                 currentTargetId = id
@@ -471,8 +454,10 @@ class MainActivity : AppCompatActivity() {
 
             testCameraController?.frameCallback = { data, offset, length, width, height ->
                 try {
-                    val isLanding = if (::landingController.isInitialized) landingController.getTaskState() == TaskState.LANDING else false
-                    val isPreflightChecking = if (::preflightController.isInitialized) preflightController.isChecking else false
+                    val isLanding =
+                        if (::landingController.isInitialized) landingController.getTaskState() == TaskState.LANDING else false
+                    val isPreflightChecking =
+                        if (::preflightController.isInitialized) preflightController.isChecking else false
 
                     if (isLanding || isPreflightChecking) {
                         currentTargetId = -1
@@ -480,26 +465,25 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     if (isPreflightChecking) {
-                        val isTargetLocked = (currentTargetId != -1)
+                        val isTargetLocked = currentTargetId != -1
                         preflightController.processFrame(data, offset, width, height, isTargetLocked)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "❌ 视觉处理帧时发生异常: ${e.message}", e)
+                    Log.e(TAG, "视觉处理异常: ${e.message}", e)
                 }
             }
-            Log.i(TAG, "✅ 视觉流分发枢纽初始化完成")
-
+            Log.i(TAG, "视觉流分发初始化完成")
         } catch (e: Throwable) {
-            Log.e(TAG, "❌ 严重崩溃拦截: 控制器实例化失败 (可能是 OpenCV 未就绪)", e)
+            Log.e(TAG, "视觉模块初始化失败", e)
             runOnUiThread {
-                Toast.makeText(this, "视觉模块初始化失败，请查看 Logcat！", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "视觉模块初始化失败，请检查 Logcat", Toast.LENGTH_LONG).show()
             }
         }
     }
 
     private fun onLandingClicked() {
         if (!::landingController.isInitialized) {
-            Toast.makeText(this, "控制器未就绪，请重新连接飞机并重启APP", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "控制器未就绪，请重新连接飞机后重启 APP", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -516,7 +500,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onTakeoffClicked() {
         if (!::landingController.isInitialized || !::preflightController.isInitialized) {
-            Toast.makeText(this, "控制器未就绪，请重新连接飞机并重启APP", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "控制器未就绪，请重新连接飞机后重启 APP", Toast.LENGTH_SHORT).show()
             return
         }
         if (landingController.getTaskState() != TaskState.INACTIVE) {
@@ -528,35 +512,36 @@ class MainActivity : AppCompatActivity() {
         preflightController.startCheck()
     }
 
-    // ── UI 辅助方法 ──────────────────────────────────────────────────
     private fun initUIWidgets() {
-        // 原有组件
-        fpvWidget              = findViewById(R.id.fpvWidget)
-        shootPhotoWidget       = findViewById(R.id.shootPhotoWidget)
-        recordVideoWidget      = findViewById(R.id.recordVideoWidget)
-        focalZoomWidget        = findViewById(R.id.focalZoomWidget)
+        fpvWidget = findViewById(R.id.fpvWidget)
+        shootPhotoWidget = findViewById(R.id.shootPhotoWidget)
+        recordVideoWidget = findViewById(R.id.recordVideoWidget)
+        focalZoomWidget = findViewById(R.id.focalZoomWidget)
         photoVideoSwitchWidget = findViewById(R.id.photoVideoSwitchWidget)
 
-        btnLensWide    = findViewById(R.id.btnLensWide)
-        btnLensZoom    = findViewById(R.id.btnLensZoom)
+        btnLensWide = findViewById(R.id.btnLensWide)
+        btnLensZoom = findViewById(R.id.btnLensZoom)
         btnLensThermal = findViewById(R.id.btnLensThermal)
+        btnLiveStreamPanel = findViewById(R.id.btnLiveStreamPanel)
+        btnLiveStreamAction = findViewById(R.id.btnLiveStreamAction)
 
         btnRecordWaypoint = findViewById(R.id.btnRecordWaypoint)
-        btnSaveWaypoints  = findViewById(R.id.btnSaveWaypoints)
+        btnSaveWaypoints = findViewById(R.id.btnSaveWaypoints)
         btnClearWaypoints = findViewById(R.id.btnClearWaypoints)
 
-        xSpeedText        = findViewById(R.id.xSpeedText)
-        ySpeedText        = findViewById(R.id.ySpeedText)
-        zSpeedText        = findViewById(R.id.zSpeedText)
-        yawRateText       = findViewById(R.id.yawRateText)
+        xSpeedText = findViewById(R.id.xSpeedText)
+        ySpeedText = findViewById(R.id.ySpeedText)
+        zSpeedText = findViewById(R.id.zSpeedText)
+        yawRateText = findViewById(R.id.yawRateText)
         remainingTimeText = findViewById(R.id.remainingTimeText)
+        liveStreamLayout = findViewById(R.id.liveStreamLayout)
+        liveStreamAddressText = findViewById(R.id.liveStreamAddressText)
+        liveStreamStatusText = findViewById(R.id.liveStreamStatusText)
+        liveStreamAddressInput = findViewById(R.id.liveStreamAddressInput)
+        btnLiveStreamSave = findViewById(R.id.btnLiveStreamSave)
 
-        // 新增的视觉降落与起飞按钮
         btnAutoLanding = findViewById(R.id.btnAutoLanding)
-        btnTakeoff     = findViewById(R.id.btnTakeoff)
-
-        // ★ 新增：绑定分辨率切换按钮
-        btnSwitchRes   = findViewById(R.id.btnSwitchRes)
+        btnTakeoff = findViewById(R.id.btnTakeoff)
     }
 
     private fun showErrorOnUI(msg: String) {
@@ -575,89 +560,226 @@ class MainActivity : AppCompatActivity() {
     private fun reattachStatusWidgets() {
         Log.d(TAG_SDK, "重新挂载顶栏 Widget...")
         listOf(
-            R.id.systemStatusWidget, R.id.flightModeWidget, R.id.gpsSignalWidget,
-            R.id.rcSignalWidget, R.id.videoSignalWidget, R.id.batteryWidget
-        ).forEach { id -> findViewById<View>(id)?.let { reattachView(it) } }
+            R.id.systemStatusWidget,
+            R.id.flightModeWidget,
+            R.id.gpsSignalWidget,
+            R.id.rcSignalWidget,
+            R.id.videoSignalWidget,
+            R.id.batteryWidget
+        ).forEach { id ->
+            findViewById<View>(id)?.let { reattachView(it) }
+        }
         Log.d(TAG_SDK, "完成")
     }
+
     private fun reattachView(view: View) {
         val parent = view.parent as? ViewGroup ?: return
-        val index  = parent.indexOfChild(view)
-        val lp     = view.layoutParams
+        val index = parent.indexOfChild(view)
+        val lp = view.layoutParams
         parent.removeView(view)
         parent.addView(view, index, lp)
     }
 
     private fun setupLensButtons() {
-        btnLensWide.setOnClickListener    { switchLens(CameraVideoStreamSourceType.WIDE_CAMERA) }
-        btnLensZoom.setOnClickListener    { switchLens(CameraVideoStreamSourceType.ZOOM_CAMERA) }
+        btnLensWide.setOnClickListener { switchLens(CameraVideoStreamSourceType.WIDE_CAMERA) }
+        btnLensZoom.setOnClickListener { switchLens(CameraVideoStreamSourceType.ZOOM_CAMERA) }
         btnLensThermal.setOnClickListener { switchLens(CameraVideoStreamSourceType.INFRARED_CAMERA) }
     }
 
     private fun setupWaypointButtons() {
         btnRecordWaypoint.setOnClickListener { waypointCtrl.recordWaypoint() }
-        btnSaveWaypoints.setOnClickListener  { waypointCtrl.saveWaypoints() }
+        btnSaveWaypoints.setOnClickListener { waypointCtrl.saveWaypoints() }
         btnClearWaypoints.setOnClickListener { waypointCtrl.clearWaypoints() }
     }
 
-    // ★ 新增：配置分辨率切换按钮逻辑
-    private fun setupResolutionButton() {
-        btnSwitchRes.text = if (is4K) "分辨率: 4K" else "分辨率: 1080P"
+    private fun setupLiveStreamController() {
+        liveStreamController.onStateChanged = { state ->
+            runOnUiThread { renderLiveStreamState(state) }
+        }
+        liveStreamController.updateLiveStreamCameraSource(currentCameraIndex)
+        liveStreamController.bind()
+        liveStreamAddressInput.setText(liveStreamController.getConfiguredStreamAddress())
+    }
 
-        btnSwitchRes.setOnClickListener {
-            // 如果还没初始化控制器，先初始化
-            if (testCameraController == null) {
-                ensureVisionSystemReady()
+    private fun setupLiveStreamButton() {
+        btnLiveStreamPanel.setOnClickListener {
+            toggleLiveStreamPanel()
+        }
+        btnLiveStreamSave.setOnClickListener {
+            val address = liveStreamAddressInput.text?.toString().orEmpty()
+            liveStreamController.updateConfiguredStreamAddress(address)
+            Toast.makeText(this, "推流地址已保存", Toast.LENGTH_SHORT).show()
+        }
+        btnLiveStreamAction.setOnClickListener {
+            if (!::liveStreamController.isInitialized) {
+                Toast.makeText(this, "直播模块尚未初始化", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
             }
-
-            // 确定目标分辨率
-            val targetRes = if (is4K) {
-                DroneCommProtocol.CAM_RES_1920X1080 // 从 4K 切到 1080P
+            liveStreamController.updateConfiguredStreamAddress(
+                liveStreamAddressInput.text?.toString().orEmpty()
+            )
+            stopAutoStartLiveStream()
+            val result = if (liveStreamController.isStreaming()) {
+                liveStreamController.stopLiveStream()
             } else {
-                DroneCommProtocol.CAM_RES_3840X2160 // 从 1080P 切到 4K
+                liveStreamController.startRtmpLiveStream()
             }
-
-            // 获取当前实际被激活的镜头 (利用我们之前在 Service 里的解耦逻辑)
-            val currentLens = DroneControlService.currentLensCode
-            // 帧率固定下发 30fps，保持日常使用流畅度
-            val targetFps = DroneCommProtocol.CAM_FPS_30
-
-            btnSwitchRes.isEnabled = false // 防抖动
-            btnSwitchRes.text = "切换中..."
-
-            testCameraController?.setVideoCfg(currentLens, targetRes, targetFps) { success, msg ->
-                runOnUiThread {
-                    btnSwitchRes.isEnabled = true
-                    if (success) {
-                        is4K = !is4K
-                        val resName = if (is4K) "4K" else "1080P"
-                        btnSwitchRes.text = "分辨率: $resName"
-                        Toast.makeText(this, "成功切换到 $resName", Toast.LENGTH_SHORT).show()
-                    } else {
-                        val resName = if (is4K) "4K" else "1080P" // 还原原有文字状态
-                        btnSwitchRes.text = "分辨率: $resName"
-                        Toast.makeText(this, "切换失败: $msg", Toast.LENGTH_LONG).show()
-                    }
-                }
+            if (!result.accepted) {
+                Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
             }
         }
     }
 
+    private fun renderLiveStreamState(state: LiveStreamUiState) {
+        liveStreamAddressText.text = if (state.streamAddress.isBlank()) "--" else state.streamAddress
+        if (liveStreamAddressInput.text?.toString() != state.streamAddress) {
+            liveStreamAddressInput.setText(state.streamAddress)
+            liveStreamAddressInput.setSelection(liveStreamAddressInput.text?.length ?: 0)
+        }
+        liveStreamStatusText.text = state.streamStatusText
+        handleAutoStartLiveStreamState(state)
+        liveStreamStatusText.setTextColor(
+            when {
+                state.isError -> 0xFFD32F2F.toInt()
+                state.isStreaming -> 0xFF4CAF50.toInt()
+                else -> 0xFFFFFFFF.toInt()
+            }
+        )
+        btnLiveStreamAction.isEnabled = !state.isBusy
+        btnLiveStreamSave.isEnabled = !state.isBusy
+        btnLiveStreamAction.text = when {
+            state.isBusy && state.isStreaming -> "正在停止..."
+            state.isBusy -> "正在开始..."
+            state.isStreaming -> "停止 RTMP 推流"
+            else -> "开始 RTMP 推流"
+        }
+        btnLiveStreamAction.backgroundTintList = ColorStateList.valueOf(
+            if (state.isStreaming) 0xFFC62828.toInt() else 0xFF2E7D32.toInt()
+        )
+        btnLiveStreamSave.backgroundTintList = ColorStateList.valueOf(0xFF1565C0.toInt())
+    }
+
+    private fun toggleLiveStreamPanel() {
+        isLiveStreamPanelVisible = !isLiveStreamPanelVisible
+        liveStreamLayout.visibility = if (isLiveStreamPanelVisible) View.VISIBLE else View.GONE
+        btnLiveStreamPanel.backgroundTintList = ColorStateList.valueOf(
+            if (isLiveStreamPanelVisible) 0xFF1976D2.toInt() else 0xFF455A64.toInt()
+        )
+    }
+
+    private fun scheduleAutoStartLiveStream() {
+        if (!::liveStreamController.isInitialized ||
+            liveStreamTouchedByUser ||
+            autoStreamStopped ||
+            autoStreamAwaitingResult ||
+            liveStreamController.isStreaming()
+        ) {
+            return
+        }
+        if (autoStreamAttemptCount >= AUTO_STREAM_MAX_ATTEMPTS) {
+            autoStreamStopped = true
+            return
+        }
+        pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
+        pollHandler.post(autoStartLiveStreamRunnable)
+    }
+
+    private fun attemptAutoStartLiveStream() {
+        if (!::liveStreamController.isInitialized ||
+            liveStreamTouchedByUser ||
+            autoStreamStopped ||
+            autoStreamAwaitingResult ||
+            isFinishing ||
+            isDestroyed
+        ) {
+            return
+        }
+        if (liveStreamController.isStreaming()) {
+            autoStreamStopped = true
+            return
+        }
+        if (autoStreamAttemptCount >= AUTO_STREAM_MAX_ATTEMPTS) {
+            autoStreamStopped = true
+            return
+        }
+
+        autoStreamAttemptCount += 1
+        val result = liveStreamController.startRtmpLiveStream()
+        if (result.accepted) {
+            autoStreamAwaitingResult = true
+        } else {
+            scheduleNextAutoStartIfNeeded(result.message)
+        }
+    }
+
+    private fun handleAutoStartLiveStreamState(state: LiveStreamUiState) {
+        if (liveStreamTouchedByUser || autoStreamStopped) {
+            return
+        }
+        if (state.isStreaming) {
+            autoStreamAwaitingResult = false
+            autoStreamStopped = true
+            pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
+            return
+        }
+        if (!state.isBusy && autoStreamAwaitingResult) {
+            scheduleNextAutoStartIfNeeded(state.streamStatusText)
+        }
+    }
+
+    private fun scheduleNextAutoStartIfNeeded(message: String) {
+        autoStreamAwaitingResult = false
+        if (liveStreamTouchedByUser || autoStreamStopped) {
+            return
+        }
+        if (autoStreamAttemptCount >= AUTO_STREAM_MAX_ATTEMPTS) {
+            autoStreamStopped = true
+            return
+        }
+
+        val shouldRetry =
+            message == "Aircraft is not connected" ||
+                message == "RTMP address is empty"
+
+        if (!shouldRetry) {
+            autoStreamStopped = true
+            return
+        }
+
+        pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
+        pollHandler.postDelayed(autoStartLiveStreamRunnable, AUTO_STREAM_RETRY_DELAY_MS)
+    }
+
+    private fun stopAutoStartLiveStream() {
+        liveStreamTouchedByUser = true
+        autoStreamStopped = true
+        autoStreamAwaitingResult = false
+        pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
+    }
+
     private fun switchLens(target: CameraVideoStreamSourceType) {
-        Log.d(TAG, "切换镜头 → $target")
+        Log.d(TAG, "切换镜头 -> $target")
         KeyManager.getInstance().setValue(
             KeyTools.createKey(CameraKey.KeyCameraVideoStreamSource, currentCameraIndex),
             target,
             object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
-                    Log.d(TAG, "切换成功 → $target")
-                    // 保留原有行为：通知服务切换
+                    Log.d(TAG, "切换成功 -> $target")
                     DroneControlService.updateCurrentLens(streamTypeToCode(target))
+                    if (::liveStreamController.isInitialized) {
+                        liveStreamController.updateLiveStreamCameraSource(currentCameraIndex)
+                        liveStreamController.refreshConfiguredStreamAddress()
+                    }
                 }
+
                 override fun onFailure(error: IDJIError) {
                     Log.e(TAG, "切换失败: ${error.description()}")
                     runOnUiThread {
-                        Toast.makeText(this@MainActivity, "切换失败: ${error.description()}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "切换失败: ${error.description()}",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
             }
@@ -665,18 +787,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateLensButtonState(lensType: CameraLensType) {
-        val active   = 0xFF1976D2.toInt()
+        val active = 0xFF1976D2.toInt()
         val inactive = 0xFF555555.toInt()
         btnLensWide.backgroundTintList = android.content.res.ColorStateList.valueOf(
-            if (lensType == CameraLensType.CAMERA_LENS_WIDE) active else inactive)
+            if (lensType == CameraLensType.CAMERA_LENS_WIDE) active else inactive
+        )
         btnLensZoom.backgroundTintList = android.content.res.ColorStateList.valueOf(
-            if (lensType == CameraLensType.CAMERA_LENS_ZOOM) active else inactive)
+            if (lensType == CameraLensType.CAMERA_LENS_ZOOM) active else inactive
+        )
         btnLensThermal.backgroundTintList = android.content.res.ColorStateList.valueOf(
-            if (lensType == CameraLensType.CAMERA_LENS_THERMAL) active else inactive)
+            if (lensType == CameraLensType.CAMERA_LENS_THERMAL) active else inactive
+        )
     }
 
     private fun updateViewVisibility(lensType: CameraLensType) {
-        val showZoom = lensType == CameraLensType.CAMERA_LENS_ZOOM || lensType == CameraLensType.CAMERA_LENS_THERMAL
+        val showZoom =
+            lensType == CameraLensType.CAMERA_LENS_ZOOM || lensType == CameraLensType.CAMERA_LENS_THERMAL
         focalZoomWidget.visibility = if (showZoom) View.VISIBLE else View.GONE
     }
 
@@ -687,16 +813,15 @@ class MainActivity : AppCompatActivity() {
         photoVideoSwitchWidget.updateCameraSource(pos, lens)
     }
 
-    // ── 镜头类型 ↔ 协议字节 转换 (保持原样) ────────────────────────────────────
     private fun lensTypeToCode(lens: CameraLensType): Byte = when (lens) {
-        CameraLensType.CAMERA_LENS_ZOOM    -> DroneCommProtocol.CAM_LENS_ZOOM
+        CameraLensType.CAMERA_LENS_ZOOM -> DroneCommProtocol.CAM_LENS_ZOOM
         CameraLensType.CAMERA_LENS_THERMAL -> DroneCommProtocol.CAM_LENS_INFRARED
-        else                               -> DroneCommProtocol.CAM_LENS_WIDE
+        else -> DroneCommProtocol.CAM_LENS_WIDE
     }
 
     private fun streamTypeToCode(t: CameraVideoStreamSourceType): Byte = when (t) {
-        CameraVideoStreamSourceType.ZOOM_CAMERA     -> DroneCommProtocol.CAM_LENS_ZOOM
+        CameraVideoStreamSourceType.ZOOM_CAMERA -> DroneCommProtocol.CAM_LENS_ZOOM
         CameraVideoStreamSourceType.INFRARED_CAMERA -> DroneCommProtocol.CAM_LENS_INFRARED
-        else                                        -> DroneCommProtocol.CAM_LENS_WIDE
+        else -> DroneCommProtocol.CAM_LENS_WIDE
     }
 }

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>RTMP 低延迟直播预览</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">ANDROID RTMP -> SRS -> WHEP</p>
+        <h1 class="title">本机低延迟直播预览页</h1>
+        <p class="subtitle">
+          这页默认连接本机 SRS 的 <code>obs1</code> 流，适合在 Windows 上把 SRS 和前端部署在同一台电脑，
+          由安卓设备通过 RTMP 推流，再通过 WHEP / WebRTC 拿到低延迟画面。
+        </p>
+      </section>
+
+      <section class="layout">
+        <article class="card player-card">
+          <div class="player-head">
+            <h2 class="player-title">直播画面</h2>
+            <div id="stateBadge" class="badge" data-state="idle">
+              <span class="badge-dot"></span>
+              <span id="stateLabel">等待推流</span>
+            </div>
+          </div>
+
+          <div class="player-stage">
+            <div class="video-shell">
+              <video id="liveVideo" playsinline autoplay muted controls></video>
+              <div id="overlay" class="overlay">
+                <div class="spinner"></div>
+                <h3 id="overlayTitle" class="overlay-title">等待安卓 RTMP 推流</h3>
+                <p id="overlayCopy" class="overlay-copy">请先启动 SRS，再让安卓设备把 RTMP 推到默认地址。</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="toolbar">
+            <div class="button-row">
+              <button id="startButton" class="btn-primary" type="button">开始播放</button>
+              <button id="reconnectButton" class="btn-secondary" type="button">手动重连</button>
+              <button id="stopButton" class="btn-secondary" type="button" disabled>停止播放</button>
+            </div>
+            <p class="helper-copy">目标延迟：约 300ms 到 1200ms，取决于安卓设备、局域网质量和本机网络栈状态。</p>
+          </div>
+        </article>
+
+        <aside class="card info-card">
+          <h2>当前配置</h2>
+          <div class="key-grid">
+            <div class="key-item">
+              <span class="key-label">WHEP_URL</span>
+              <p id="whepValue"><code></code></p>
+            </div>
+            <div class="key-item">
+              <span class="key-label">PORT</span>
+              <p id="portValue"><code></code></p>
+            </div>
+            <div class="key-item">
+              <span class="key-label">AUTO_PLAY</span>
+              <p id="autoplayValue"><code></code></p>
+            </div>
+            <div class="key-item">
+              <span class="key-label">SHOW_RECONNECT</span>
+              <p id="reconnectValue"><code></code></p>
+            </div>
+          </div>
+
+          <h3>状态说明</h3>
+          <ul class="status-list">
+            <li><strong>连接中</strong>：页面已向 SRS 发起 WHEP/WebRTC 建连。</li>
+            <li><strong>播放中</strong>：浏览器已收到直播媒体流。</li>
+            <li><strong>连接失败</strong>：通常是 SRS 没启动、安卓端没推流或防火墙拦截了 <code>8000/udp</code>。</li>
+          </ul>
+
+          <h3>默认推流信息</h3>
+          <ul class="tips-list">
+            <li><code>RTMP_URL=rtmp://&lt;Windows电脑IP&gt;:1935/live/obs1</code></li>
+            <li><code>WHEP_URL=http://127.0.0.1:1985/rtc/v1/whep/?app=live&stream=obs1</code></li>
+            <li>安卓端要求：<code>DJI H.264 / RTMP / 无音频</code></li>
+          </ul>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -56,7 +56,6 @@
             android:layout_width="wrap_content"
             android:layout_height="30dp"
             android:layout_marginStart="8dp" />
-
     </LinearLayout>
 
     <LinearLayout
@@ -196,7 +195,6 @@
                 android:textColor="#FFFFFF"
                 android:textSize="14sp" />
         </LinearLayout>
-
     </LinearLayout>
 
     <LinearLayout
@@ -229,6 +227,17 @@
             android:textColor="#FFFFFF"
             android:textSize="18sp"
             android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnLiveStreamPanel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:backgroundTint="#455A64"
+            android:text="直播"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
     <LinearLayout
@@ -245,7 +254,7 @@
 
         <Button
             android:id="@+id/btnLensWide"
-            android:layout_width="72dp"
+            android:layout_width="56dp"
             android:layout_height="40dp"
             android:backgroundTint="#555555"
             android:padding="0dp"
@@ -255,7 +264,7 @@
 
         <Button
             android:id="@+id/btnLensZoom"
-            android:layout_width="72dp"
+            android:layout_width="56dp"
             android:layout_height="40dp"
             android:layout_marginTop="4dp"
             android:backgroundTint="#555555"
@@ -266,7 +275,7 @@
 
         <Button
             android:id="@+id/btnLensThermal"
-            android:layout_width="72dp"
+            android:layout_width="56dp"
             android:layout_height="40dp"
             android:layout_marginTop="4dp"
             android:backgroundTint="#555555"
@@ -274,18 +283,103 @@
             android:text="红外"
             android:textColor="#FFFFFF"
             android:textSize="11sp" />
+    </LinearLayout>
 
-        <Button
-            android:id="@+id/btnSwitchRes"
-            android:layout_width="72dp"
-            android:layout_height="40dp"
+    <LinearLayout
+        android:id="@+id/liveStreamLayout"
+        android:layout_width="280dp"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/bottomActionLayout"
+        android:layout_alignParentStart="true"
+        android:layout_marginStart="24dp"
+        android:layout_marginBottom="12dp"
+        android:background="#AA000000"
+        android:orientation="vertical"
+        android:padding="10dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="直播"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/liveStreamAddressLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:backgroundTint="#1976D2"
-            android:padding="0dp"
-            android:text="分辨率: 4K"
+            android:text="RTMP 地址"
+            android:textColor="#AAFFFFFF"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/liveStreamAddressText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:fontFamily="monospace"
+            android:text="--"
             android:textColor="#FFFFFF"
             android:textSize="11sp" />
 
+        <EditText
+            android:id="@+id/liveStreamAddressInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#1AFFFFFF"
+            android:fontFamily="monospace"
+            android:hint="rtmp://192.168.1.20:1935/live/obs1"
+            android:imeOptions="actionDone"
+            android:inputType="textUri"
+            android:padding="8dp"
+            android:singleLine="true"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#88FFFFFF"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnLiveStreamSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="#1565C0"
+            android:text="保存推流地址"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/liveStreamStatusLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="状态"
+            android:textColor="#AAFFFFFF"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/liveStreamStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="未开始"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnLiveStreamAction"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:backgroundTint="#2E7D32"
+            android:text="开始 RTMP 推流"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
     <LinearLayout
@@ -295,10 +389,11 @@
         android:layout_below="@id/lensControlLayout"
         android:layout_alignParentEnd="true"
         android:layout_marginTop="8dp"
-        android:layout_marginEnd="80dp"
+        android:layout_marginEnd="16dp"
         android:background="#AA000000"
         android:orientation="vertical"
         android:padding="4dp">
+
         <Button
             android:id="@+id/btnRecordWaypoint"
             android:layout_width="72dp"
@@ -330,7 +425,6 @@
             android:text="清除航点"
             android:textColor="#FFFFFF"
             android:textSize="11sp" />
-
     </LinearLayout>
 
     <dji.v5.ux.visualcamera.zoom.FocalZoomWidget
