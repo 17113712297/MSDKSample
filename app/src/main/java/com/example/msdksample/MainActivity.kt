@@ -15,6 +15,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.example.msdksample.devicereport.DeviceStatusReportManager
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.key.KeyTools
@@ -96,6 +97,7 @@ class MainActivity : AppCompatActivity() {
     private var testCameraController: CameraController? = null
     private var visionController: VisionController? = null
     private lateinit var liveStreamController: LiveStreamController
+    private lateinit var deviceStatusReportManager: DeviceStatusReportManager
     private lateinit var landingController: LandingController
     private lateinit var preflightController: PreflightController
     @Volatile private var currentTargetId = -1
@@ -162,11 +164,15 @@ class MainActivity : AppCompatActivity() {
         initUIWidgets()
 
         try {
+            liveStreamController = LiveStreamController(this)
+            deviceStatusReportManager = DeviceStatusReportManager {
+                liveStreamController.getConfiguredStreamAddress()
+            }
+            setupLiveStreamController()
+            deviceStatusReportManager.start()
             landingController = LandingController()
             preflightController = PreflightController()
-            liveStreamController = LiveStreamController(this)
             setupControllerCallbacks()
-            setupLiveStreamController()
             DroneControlService.preflightController = preflightController
             DroneControlService.landingController = landingController
         } catch (e: Exception) {
@@ -249,6 +255,9 @@ class MainActivity : AppCompatActivity() {
         if (::liveStreamController.isInitialized) {
             liveStreamController.stopStreamIfNeeded()
             liveStreamController.release()
+        }
+        if (::deviceStatusReportManager.isInitialized) {
+            deviceStatusReportManager.stop()
         }
         if (::landingController.isInitialized) landingController.release()
         if (::preflightController.isInitialized) preflightController.release()
@@ -608,6 +617,9 @@ class MainActivity : AppCompatActivity() {
         btnLiveStreamSave.setOnClickListener {
             val address = liveStreamAddressInput.text?.toString().orEmpty()
             liveStreamController.updateConfiguredStreamAddress(address)
+            if (::deviceStatusReportManager.isInitialized) {
+                deviceStatusReportManager.reportNow()
+            }
             Toast.makeText(this, "推流地址已保存", Toast.LENGTH_SHORT).show()
         }
         btnLiveStreamAction.setOnClickListener {
@@ -618,6 +630,9 @@ class MainActivity : AppCompatActivity() {
             liveStreamController.updateConfiguredStreamAddress(
                 liveStreamAddressInput.text?.toString().orEmpty()
             )
+            if (::deviceStatusReportManager.isInitialized) {
+                deviceStatusReportManager.reportNow()
+            }
             stopAutoStartLiveStream()
             val result = if (liveStreamController.isStreaming()) {
                 liveStreamController.stopLiveStream()

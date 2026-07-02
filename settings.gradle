@@ -2,4 +2,3 @@ rootProject.name = "MSDKSample"
 include ':app'
 include ':android-sdk-v5-uxsdk'
 include ':opencv'
-include ':app', ':opencv'
