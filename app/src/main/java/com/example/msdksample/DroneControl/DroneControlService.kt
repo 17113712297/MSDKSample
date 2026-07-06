@@ -47,6 +47,11 @@ class DroneControlService : Service() {
         @Volatile
         var onResetVisionTracking: (() -> Unit)? = null
 
+        // ⭐【速度面板协调标志】：VelocityControlPanel 激活时置 true，
+        //   用于拦截 CMD_VEL 防止与本端手动速度控制冲突
+        @Volatile
+        var isVelocityPanelActive = false
+
         fun sendFrame(data: ByteArray) {
             val mgr = try {
                 PayloadCenter.getInstance().payloadManager[PayloadIndexType.UP]
@@ -159,6 +164,12 @@ class DroneControlService : Service() {
             DroneCommProtocol.CMD_VEL -> {
                 if (landingController?.getTaskState() == TaskState.LANDING) {
                     Log.w(TAG, "🚨 [拦截控制冲突] 本端正在闭合执行 Aruco 降落判定，已强行丢弃来自 Jetson 的 CMD_VEL 指令")
+                    sendAck(DroneCommProtocol.CMD_VEL, DroneCommProtocol.ACK_FAIL)
+                    return
+                }
+                // ⭐【速度面板互斥】：手动速度控制面板激活时拦截 CMD_VEL
+                if (isVelocityPanelActive) {
+                    Log.w(TAG, "🚨 [拦截控制冲突] 速度控制面板激活中，已拦截 Jetson CMD_VEL")
                     sendAck(DroneCommProtocol.CMD_VEL, DroneCommProtocol.ACK_FAIL)
                     return
                 }
