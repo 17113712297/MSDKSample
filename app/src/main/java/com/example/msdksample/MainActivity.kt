@@ -83,6 +83,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var liveStreamAddressInput: EditText
     private lateinit var btnLiveStreamSave: Button
 
+    // ── ★ 速度控制面板 ─────────────────────────────────────────
+    private lateinit var velocityPanel: VelocityControlPanel
+    private lateinit var btnVelStartStop: Button
+    private lateinit var btnVelZero: Button
+    private lateinit var btnVelYawMinus: Button
+    private lateinit var btnVelYawPlus: Button
+    private lateinit var btnVelXMinus: Button
+    private lateinit var btnVelXPlus: Button
+    private lateinit var btnVelYMinus: Button
+    private lateinit var btnVelYPlus: Button
+    private lateinit var btnVelZMinus: Button
+    private lateinit var btnVelZPlus: Button
+    private lateinit var txtVelStatus: TextView
+
     private var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 
     private val cameraSourceProcessor = DataProcessor.create(
@@ -200,6 +214,11 @@ class MainActivity : AppCompatActivity() {
         btnAutoLanding?.setOnClickListener { onLandingClicked() }
         btnTakeoff?.setOnClickListener { onTakeoffClicked() }
 
+        // ═══════════════════════════════════════════════════════
+        // ★ 速度控制面板初始化
+        // ═══════════════════════════════════════════════════════
+        setupVelocityPanel()
+
         window.decorView.postDelayed({ reattachStatusWidgets() }, REATTACH_DELAY)
         runCatching {
             ContextCompat.startForegroundService(this, Intent(this, DroneControlService::class.java))
@@ -263,6 +282,9 @@ class MainActivity : AppCompatActivity() {
         if (::preflightController.isInitialized) preflightController.release()
         visionController?.release()
         runCatching { testCameraController?.stopVideoStream() }
+
+        // ★ 释放速度控制面板
+        if (::velocityPanel.isInitialized) velocityPanel.release()
     }
 
     private fun pollVelocity() {
@@ -273,9 +295,9 @@ class MainActivity : AppCompatActivity() {
                     override fun onSuccess(value: Velocity3D?) {
                         value ?: return
                         runOnUiThread {
-                            xSpeedText.text = "%+.2f m/s".format(value.x)
-                            ySpeedText.text = "%+.2f m/s".format(value.y)
-                            zSpeedText.text = "%+.2f m/s".format(value.z)
+                            xSpeedText.text = "%+.2f".format(value.x)
+                            ySpeedText.text = "%+.2f".format(value.y)
+                            zSpeedText.text = "%+.2f".format(value.z)
                         }
                     }
 
@@ -307,7 +329,7 @@ class MainActivity : AppCompatActivity() {
                                     if (yawRateText.currentTextColor != 0xFFD32F2F.toInt() &&
                                         yawRateText.currentTextColor != 0xFF4CAF50.toInt()
                                     ) {
-                                        yawRateText.text = "%+.1f °/s".format(delta / dtSec)
+                                        yawRateText.text = "%+.1f".format(delta / dtSec)
                                     }
                                 }
                             }
@@ -551,6 +573,143 @@ class MainActivity : AppCompatActivity() {
 
         btnAutoLanding = findViewById(R.id.btnAutoLanding)
         btnTakeoff = findViewById(R.id.btnTakeoff)
+
+        // ═══════════════════════════════════════════════════════
+        // ★ 速度控制面板按钮绑定
+        // ═══════════════════════════════════════════════════════
+        btnVelStartStop = findViewById(R.id.btnVelStartStop)
+        btnVelZero      = findViewById(R.id.btnVelZero)
+        btnVelYawMinus  = findViewById(R.id.btnVelYawMinus)
+        btnVelYawPlus   = findViewById(R.id.btnVelYawPlus)
+        btnVelXMinus    = findViewById(R.id.btnVelXMinus)
+        btnVelXPlus     = findViewById(R.id.btnVelXPlus)
+        btnVelYMinus    = findViewById(R.id.btnVelYMinus)
+        btnVelYPlus     = findViewById(R.id.btnVelYPlus)
+        btnVelZMinus    = findViewById(R.id.btnVelZMinus)
+        btnVelZPlus     = findViewById(R.id.btnVelZPlus)
+        txtVelStatus    = findViewById(R.id.txtVelStatus)
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // ★ 速度控制面板
+    // ═══════════════════════════════════════════════════════
+    private fun setupVelocityPanel() {
+        velocityPanel = VelocityControlPanel()
+
+        // Toast 回调
+        velocityPanel.toastCallback = { msg ->
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+
+        // 面板状态变更 → 更新按钮外观
+        velocityPanel.onPanelStateChanged = { state ->
+            runOnUiThread {
+                when (state) {
+                    VelocityControlPanel.PanelState.IDLE -> {
+                        btnVelStartStop.text = "启动速度控制"
+                        btnVelStartStop.setBackgroundColor(
+                            if (velocityPanel.isInNMode()) 0xFF4CAF50.toInt()
+                            else 0xFF555555.toInt()
+                        )
+                        btnVelStartStop.isEnabled = velocityPanel.isInNMode()
+                        btnVelZero.isEnabled = false
+                        btnVelZero.setBackgroundColor(0xFF555555.toInt())
+                        setVelButtonsEnabled(false)
+                        txtVelStatus.text = if (velocityPanel.isInNMode()) "N挡就绪" else "等待N挡..."
+                        txtVelStatus.setTextColor(
+                            if (velocityPanel.isInNMode()) 0xFF888888.toInt()
+                            else 0xFFFF9800.toInt()
+                        )
+                    }
+                    VelocityControlPanel.PanelState.ACTIVE -> {
+                        btnVelStartStop.text = "关闭速度控制"
+                        btnVelStartStop.setBackgroundColor(0xFFD32F2F.toInt())
+                        btnVelStartStop.isEnabled = true
+                        btnVelZero.isEnabled = true
+                        btnVelZero.setBackgroundColor(0xFFFF9800.toInt())
+                        setVelButtonsEnabled(true)
+                        txtVelStatus.text = "● 控制中"
+                        txtVelStatus.setTextColor(0xFF4CAF50.toInt())
+                    }
+                }
+            }
+        }
+
+        // N 挡可用性变更 → 更新启动按钮及状态文字
+        velocityPanel.onNModeAvailabilityChanged = { available ->
+            runOnUiThread {
+                if (velocityPanel.getState() == VelocityControlPanel.PanelState.IDLE) {
+                    velocityPanel.updateStartButtonState(btnVelStartStop)
+                    val modeName = velocityPanel.getCurrentFlightModeName()
+                    txtVelStatus.text = if (available) "N挡就绪"
+                        else "等待N挡... [$modeName]"
+                    txtVelStatus.setTextColor(
+                        if (available) 0xFF888888.toInt() else 0xFFFF9800.toInt()
+                    )
+                }
+            }
+        }
+
+        // ★ 回调全部设置完毕后，再注册监听（触发初始飞行模式查询）
+        velocityPanel.registerFlightModeListener()
+
+        // ── 按钮点击事件绑定 ──────────────────────────────────────
+
+        btnVelStartStop.setOnClickListener {
+            velocityPanel.toggleStartStop()
+            velocityPanel.updateStartButtonState(btnVelStartStop)
+        }
+
+        btnVelZero.setOnClickListener {
+            if (velocityPanel.getState() == VelocityControlPanel.PanelState.ACTIVE) {
+                velocityPanel.zeroVelocity()
+                Toast.makeText(this, "速度已归零 → 悬停", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // Yaw 偏航 +/-
+        btnVelYawPlus.setOnClickListener  { velocityPanel.adjustYaw(+1f) }
+        btnVelYawMinus.setOnClickListener { velocityPanel.adjustYaw(-1f) }
+
+        // X 轴速度 +/-
+        btnVelXPlus.setOnClickListener  { velocityPanel.adjustVelocity('X', +1f) }
+        btnVelXMinus.setOnClickListener { velocityPanel.adjustVelocity('X', -1f) }
+
+        // Y 轴速度 +/-
+        btnVelYPlus.setOnClickListener  { velocityPanel.adjustVelocity('Y', +1f) }
+        btnVelYMinus.setOnClickListener { velocityPanel.adjustVelocity('Y', -1f) }
+
+        // Z 轴速度 +/-
+        btnVelZPlus.setOnClickListener  { velocityPanel.adjustVelocity('Z', +1f) }
+        btnVelZMinus.setOnClickListener { velocityPanel.adjustVelocity('Z', -1f) }
+
+        // 初始状态：所有速度按钮禁用
+        setVelButtonsEnabled(false)
+        btnVelZero.isEnabled = false
+        btnVelZero.setBackgroundColor(0xFF555555.toInt())
+        velocityPanel.updateStartButtonState(btnVelStartStop)
+
+        Log.i(TAG, "✅ 速度控制面板初始化完成")
+    }
+
+    private fun setVelButtonsEnabled(enabled: Boolean) {
+        listOf(btnVelYawPlus, btnVelYawMinus,
+               btnVelXPlus, btnVelXMinus,
+               btnVelYPlus, btnVelYMinus,
+               btnVelZPlus, btnVelZMinus).forEach { btn ->
+            btn.isEnabled = enabled
+            if (!enabled) btn.setBackgroundColor(0xFF555555.toInt())
+        }
+        if (enabled) {
+            btnVelYawPlus.setBackgroundColor(0xFF9C27B0.toInt())
+            btnVelYawMinus.setBackgroundColor(0xFF9C27B0.toInt())
+            btnVelXPlus.setBackgroundColor(0xFF1976D2.toInt())
+            btnVelXMinus.setBackgroundColor(0xFF1976D2.toInt())
+            btnVelYPlus.setBackgroundColor(0xFF388E3C.toInt())
+            btnVelYMinus.setBackgroundColor(0xFF388E3C.toInt())
+            btnVelZPlus.setBackgroundColor(0xFFF57C00.toInt())
+            btnVelZMinus.setBackgroundColor(0xFFF57C00.toInt())
+        }
     }
 
     private fun showErrorOnUI(msg: String) {
@@ -563,7 +722,7 @@ class MainActivity : AppCompatActivity() {
     private fun clearErrorOnUI() {
         yawRateText.setTextColor(0xFFFFFFFF.toInt())
         yawRateText.textSize = 14f
-        yawRateText.text = "0.0 °/s"
+        yawRateText.text = "0.0"
     }
 
     private fun reattachStatusWidgets() {

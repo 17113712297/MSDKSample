@@ -17,15 +17,109 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="2145581a-3e18-44cd-94c6-ac0803a6997b" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.gradle/buildOutputCleanup/buildOutputCleanup.lock" beforeDir="false" afterPath="$PROJECT_DIR$/.gradle/buildOutputCleanup/buildOutputCleanup.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gradle/buildOutputCleanup/cache.properties" beforeDir="false" afterPath="$PROJECT_DIR$/.gradle/buildOutputCleanup/cache.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gradle/buildOutputCleanup/outputFiles.bin" beforeDir="false" afterPath="$PROJECT_DIR$/.gradle/buildOutputCleanup/outputFiles.bin" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gradle/config.properties" beforeDir="false" afterPath="$PROJECT_DIR$/.gradle/config.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gradle/file-system.probe" beforeDir="false" afterPath="$PROJECT_DIR$/.gradle/file-system.probe" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/DroneControlService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/DroneControl/DroneControlService.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/MainActivity.kt" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/java/com/example/msdksample/MainActivity.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/src/main/res/layout/activity_main.xml" beforeDir="false" afterPath="$PROJECT_DIR$/app/src/main/res/layout/activity_main.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/reports/problems/problems-report.html" beforeDir="false" afterPath="$PROJECT_DIR$/build/reports/problems/problems-report.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gradle.properties" beforeDir="false" afterPath="$PROJECT_DIR$/gradle.properties" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/arm64-v8a/configure_fingerprint.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/arm64-v8a/configure_fingerprint.bin" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/x86/configure_fingerprint.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/.cxx/Debug/1s2h1u5w/x86/configure_fingerprint.bin" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_212_timing.txt" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_212_timing.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/configure_command.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/configure_stderr.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/configure_stdout.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1001_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_10129_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1060_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_10612_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1063_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1068_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_11129_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_11608_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_12108_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_12600_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1267_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1268_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1287_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_13078_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1330_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1440_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1454_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1590_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1762_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1801_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1808_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_1969_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_2018_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_202_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_204_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_2080_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_212_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_2244_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_2488_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_2530_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_2557_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_2741_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_3019_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_3147_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_3275_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_3492_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_3647_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_3762_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_4139_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_4263_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_452_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_454_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_455_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_456_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_461_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_462_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_463_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_4641_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_464_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_466_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_467_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_469_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_4733_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_5202_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_526_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_5378_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_5688_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_5980_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_6206_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_6477_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_6967_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_6974_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_7298_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_7474_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_750_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_7770_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_7963_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_796_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_811_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_812_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_814_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_8236_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_8456_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_8728_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_8958_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_9217_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_9422_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_9452_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_9603_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_978_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_983_timing.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/arm64-v8a/generate_cxx_metadata_9948_timing.txt" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/x86/generate_cxx_metadata_55_timing.txt" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/intermediates/cxx/Debug/1s2h1u5w/logs/x86/generate_cxx_metadata_55_timing.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/cacheable/last-build.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/cacheable/last-build.bin" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/local-state/build-history.bin" beforeDir="false" afterPath="$PROJECT_DIR$/opencv/build/kotlin/compileDebugKotlin/local-state/build-history.bin" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -219,7 +313,7 @@
       <breakpoints>
         <line-breakpoint enabled="true" type="kotlin-field">
           <url>file://$PROJECT_DIR$/app/src/main/java/com/example/msdksample/MainActivity.kt</url>
-          <line>52</line>
+          <line>57</line>
           <properties myFieldName="recordVideoWidget" myClassName="com.example.msdksample.MainActivity" />
           <option name="timeStamp" value="1" />
         </line-breakpoint>
