@@ -1,0 +1,16 @@
+# Project exclude paths
+/build/
+/android-sdk-v5-uxsdk/.gradle/
+/android-sdk-v5-uxsdk/build/
+/app/.cxx/
+/app/build/
+/opencv/.cxx/
+/opencv/build/
+/.gradle/
+/.idea/
+/.kotlin/
+/.tmp_dji/
+/local.properties
+
+# Claude Code local config
+CLAUDE.md
