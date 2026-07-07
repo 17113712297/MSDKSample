@@ -200,6 +200,19 @@ class MainActivity : AppCompatActivity() {
             setupControllerCallbacks()
             DroneControlService.preflightController = preflightController
             DroneControlService.landingController = landingController
+            DroneControlService.onStartCameraStream = {
+                runOnUiThread {
+                    ensureVisionSystemReady()
+                    visionController?.resetTracking()
+                    testCameraController?.startVideoStream()
+                }
+            }
+            DroneControlService.onResetVisionTracking = {
+                visionController?.resetTracking()
+            }
+            DroneControlService.onStopCameraStream = {
+                runCatching { testCameraController?.stopVideoStream() }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Controller init failed", e)
             showErrorOnUI("控制器初始化失败，请确保飞机已连接")
@@ -295,6 +308,9 @@ class MainActivity : AppCompatActivity() {
             videoTransferManager.release()
         }
         DroneControlService.onEnqueueLatestVideoTransfer = null
+        DroneControlService.onStartCameraStream = null
+        DroneControlService.onStopCameraStream = null
+        DroneControlService.onResetVisionTracking = null
         if (::landingController.isInitialized) landingController.release()
         if (::preflightController.isInitialized) preflightController.release()
         visionController?.release()
@@ -413,6 +429,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (state == TaskState.INACTIVE && previousLandingState == TaskState.LANDING) {
                 previousLandingState = TaskState.INACTIVE
+                DroneControlService.onStopCameraStream?.invoke()
                 runCatching {
                     val frame = DroneCommProtocol.encodeSimple(
                         DroneCommProtocol.CMD_ACK_LAND_COMPLETE
@@ -447,6 +464,7 @@ class MainActivity : AppCompatActivity() {
                 yawRateText.textSize = 14f
                 Toast.makeText(this, "安全检查通过", Toast.LENGTH_LONG).show()
             }
+            DroneControlService.onStopCameraStream?.invoke()
             runCatching {
                 val frame = DroneCommProtocol.encodeSimple(
                     DroneCommProtocol.CMD_ACK_CHECK_PASSED
@@ -461,6 +479,7 @@ class MainActivity : AppCompatActivity() {
                 btnTakeoff?.text = "重新检查"
                 showErrorOnUI(reason)
             }
+            DroneControlService.onStopCameraStream?.invoke()
             runCatching {
                 val reasonCode: Byte = when {
                     reason.contains("夹爪", ignoreCase = true) ||
