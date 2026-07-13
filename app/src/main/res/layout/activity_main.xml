@@ -106,6 +106,24 @@
     <!-- ═══════════════════════════════════════════════════════ -->
     <!-- 直播按钮 (右上角，镜头控制左边)                         -->
     <!-- ═══════════════════════════════════════════════════════ -->
+    <TextView
+        android:id="@+id/transferDebugText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/hudLayout"
+        android:layout_marginStart="8dp"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="8dp"
+        android:background="#CC102027"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="8dp"
+        android:text="传输调试信息"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
     <Button
         android:id="@+id/btnLiveStreamPanel"
         android:layout_width="56dp"

@@ -8,6 +8,8 @@ import android.provider.MediaStore
 import android.util.Log
 import com.example.msdksample.network.MultipartHttpClient
 import com.example.msdksample.network.StreamAddressResolver
+import dji.sdk.keyvalue.key.CameraKey
+import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.value.camera.CameraStorageLocation
 import dji.sdk.keyvalue.value.camera.DateTime
 import dji.sdk.keyvalue.value.camera.MediaFileType
@@ -15,6 +17,7 @@ import dji.sdk.keyvalue.value.common.ComponentIndexType
 import dji.sdk.keyvalue.value.file.FileListRequestTimeOrderType
 import dji.v5.common.callback.CommonCallbacks
 import dji.v5.common.error.IDJIError
+import dji.v5.manager.KeyManager
 import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.datacenter.media.MediaFile
 import dji.v5.manager.datacenter.media.MediaFileDownloadListener
@@ -35,8 +38,10 @@ import java.util.GregorianCalendar
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 class VideoTransferManager(
@@ -56,7 +61,10 @@ class VideoTransferManager(
         private const val DISABLE_TIMEOUT_MS = 5_000L
         private const val PULL_TIMEOUT_MS = 15_000L
         private const val DOWNLOAD_TIMEOUT_MS = 10 * 60_000L
-        private const val RECORD_SETTLE_MS = 8_000L
+        private const val RECORD_SETTLE_MS = 30_000L
+        private const val TRANSFER_GATE_POLL_MS = 1_000L
+        private const val STATUS_PROGRESS_STEP_PERCENT = 5L
+        private const val STATUS_PROGRESS_INTERVAL_MS = 1_000L
         private const val EMPTY_LIST_RETRY_DELAY_MS = 3_000L
         private const val MAX_PULL_ATTEMPTS = 5
         private const val MEDIA_PULL_COUNT = 100
@@ -70,11 +78,19 @@ class VideoTransferManager(
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "video-transfer").apply { isDaemon = true }
     }
+    private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "video-transfer-scheduler").apply { isDaemon = true }
+    }
     private val workerRunning = AtomicBoolean(false)
     private val pendingTransfer = AtomicBoolean(false)
+    private val recordStopSequence = AtomicLong(0L)
+    private val countdownFutureRef = AtomicReference<ScheduledFuture<*>?>(null)
+    @Volatile private var lastRecordStopEventTimeMs = 0L
+    var statusCallback: ((String) -> Unit)? = null
 
     fun enqueueLatestVideoTransfer() {
         pendingTransfer.set(true)
+        emitStatus("视频传输已排队，等待安全拉取窗口")
         if (workerRunning.compareAndSet(false, true)) {
             executor.execute { drainPendingTransfers() }
         } else {
@@ -82,7 +98,45 @@ class VideoTransferManager(
         }
     }
 
+    fun enqueueLatestVideoTransferAfterRecordStop() {
+        val stopTimeMs = System.currentTimeMillis()
+        lastRecordStopEventTimeMs = stopTimeMs
+        val sequence = recordStopSequence.incrementAndGet()
+        cancelPendingCountdown()
+        emitStatus("检测到录制结束，30 秒后开始拉取 SD 卡视频")
+        Log.i(TAG, "Record stop detected, schedule transfer after 30s. seq=$sequence stopTimeMs=$stopTimeMs")
+        val countdownFuture = scheduler.scheduleAtFixedRate({
+            if (recordStopSequence.get() != sequence) {
+                return@scheduleAtFixedRate
+            }
+            val elapsedMs = System.currentTimeMillis() - stopTimeMs
+            val remainingMs = (RECORD_SETTLE_MS - elapsedMs).coerceAtLeast(0L)
+            val remainingSeconds = ((remainingMs + 999L) / 1000L).coerceAtLeast(0L)
+            if (remainingSeconds > 0L) {
+                emitStatus("录制结束倒计时: ${remainingSeconds}s 后开始拉取 SD 卡视频")
+            }
+        }, 0L, 1L, TimeUnit.SECONDS)
+        countdownFutureRef.set(countdownFuture)
+        scheduler.schedule({
+            if (recordStopSequence.get() != sequence) {
+                Log.i(TAG, "Skip outdated scheduled transfer. seq=$sequence latest=${recordStopSequence.get()}")
+                return@schedule
+            }
+
+            cancelPendingCountdown()
+            pendingTransfer.set(true)
+            emitStatus("录制结束已满 30 秒，准备拉取 SD 卡视频")
+            if (workerRunning.compareAndSet(false, true)) {
+                executor.execute { drainPendingTransfers() }
+            } else {
+                Log.i(TAG, "Coalesced scheduled post-record-stop transfer while another transfer is running")
+            }
+        }, RECORD_SETTLE_MS, TimeUnit.MILLISECONDS)
+    }
+
     fun release() {
+        cancelPendingCountdown()
+        scheduler.shutdownNow()
         executor.shutdownNow()
     }
 
@@ -104,6 +158,7 @@ class VideoTransferManager(
             transferLatestVideo()
         }.onFailure { error ->
             Log.w(TAG, "Latest video transfer failed: ${error.message}", error)
+            emitStatus("视频传输失败: ${error.message ?: "未知异常"}")
         }
     }
 
@@ -112,36 +167,98 @@ class VideoTransferManager(
         val host = StreamAddressResolver.extractHost(streamAddress)
         if (host.isNullOrBlank()) {
             Log.w(TAG, "Skip latest video transfer because RTMP host is unavailable: $streamAddress")
+            emitStatus("未配置可用 RTMP 主机，跳过视频传输")
             return
         }
 
-        Log.i(TAG, "Latest video transfer queued for host=$host:$UPLOAD_PORT")
-        Thread.sleep(RECORD_SETTLE_MS)
+        emitStatus("等待安全拉取窗口: host=$host:$UPLOAD_PORT")
+        waitForSafeTransferWindow()
+        lastRecordStopEventTimeMs = 0L
 
         val mediaManager = MediaDataCenter.getInstance().mediaManager
+        emitStatus("开始接管媒体管理器，准备读取无人机 SD 卡")
         configureMediaSource(mediaManager)
         enableMediaManager(mediaManager)
 
         try {
             val mediaFile = pullLatestVideo(mediaManager) ?: run {
                 Log.i(TAG, "No uploadable MP4 media file found on camera storage")
+                emitStatus("未在无人机 SD 卡中找到可上传视频")
                 return
             }
 
             val mediaId = buildMediaId(mediaFile)
             if (mediaId == lastUploadedMediaId()) {
                 Log.i(TAG, "Skip upload because latest video was already uploaded: $mediaId")
+                emitStatus("最新视频已上传过，跳过重复传输")
                 return
             }
 
+            emitStatus("开始从无人机 SD 卡拉取: ${mediaFile.getFileName()}")
             val localFile = downloadMediaFile(mediaFile)
             val uploadFileName = buildUploadFileName(mediaFile.getFileName())
-            exportVideoToPublicDirectory(localFile, uploadFileName)
+            val exportedToPublicDir = exportVideoToPublicDirectory(localFile, uploadFileName)
+            emitStatus("开始上传到前端: $uploadFileName")
             uploadVideoFile(host, localFile, uploadFileName)
             markUploaded(mediaId)
+            if (exportedToPublicDir) {
+                deleteLocalWorkingFile(localFile)
+            } else {
+                Log.w(TAG, "Keeping local working file because public export did not complete: ${localFile.absolutePath}")
+            }
             Log.i(TAG, "Latest video transfer completed successfully: $uploadFileName")
+            emitStatus("视频拉取并上传完成: $uploadFileName")
         } finally {
             disableMediaManager(mediaManager)
+        }
+    }
+
+    private fun waitForSafeTransferWindow() {
+        var lastLogTimeMs = 0L
+
+        while (true) {
+            if (Thread.currentThread().isInterrupted) {
+                throw InterruptedException("Interrupted while waiting for safe transfer window")
+            }
+
+            val now = System.currentTimeMillis()
+            val isRecording = runCatching {
+                KeyManager.getInstance().getValue(
+                    KeyTools.createKey(CameraKey.KeyIsRecording, cameraIndexProvider.invoke())
+                ) ?: false
+            }.getOrDefault(true)
+
+            val timeSinceRecordStopMs = if (lastRecordStopEventTimeMs > 0L) {
+                now - lastRecordStopEventTimeMs
+            } else {
+                0L
+            }
+
+            val hasRecentRecordStopEvent = lastRecordStopEventTimeMs > 0L
+            val canTransferAfterRecordStop =
+                !isRecording &&
+                    hasRecentRecordStopEvent &&
+                    timeSinceRecordStopMs >= RECORD_SETTLE_MS
+            if (canTransferAfterRecordStop) {
+                val detail = "停录已满 ${timeSinceRecordStopMs / 1000}s，允许开始拉取 SD 卡"
+                Log.i(TAG, "Transfer gate passed: $detail")
+                emitStatus("允许开始拉取 SD 卡: $detail")
+                return
+            }
+
+            if (now - lastLogTimeMs >= 1_000L) {
+                lastLogTimeMs = now
+                val status = when {
+                    isRecording -> "录制中，等待结束录制"
+                    hasRecentRecordStopEvent ->
+                        "已停录，等待 ${((RECORD_SETTLE_MS - timeSinceRecordStopMs).coerceAtLeast(0L)) / 1000}s"
+                    else -> "等待录制结束事件，收到后 30 秒再拉取 SD 卡"
+                }
+                Log.i(TAG, "Waiting for safe transfer window: $status")
+                emitStatus("安全窗口检查中: $status")
+            }
+
+            Thread.sleep(TRANSFER_GATE_POLL_MS)
         }
     }
 
@@ -153,13 +270,16 @@ class VideoTransferManager(
             .build()
         mediaManager.setMediaFileDataSource(dataSource)
         Log.i(TAG, "Configured media source index=$cameraIndex location=${CameraStorageLocation.SDCARD}")
+        emitStatus("已锁定 SD 卡媒体源: $cameraIndex")
     }
 
     private fun enableMediaManager(mediaManager: IMediaManager) {
+        emitStatus("正在启用媒体管理器")
         awaitCompletion("enable media manager", ENABLE_TIMEOUT_MS) { callback ->
             mediaManager.enable(callback)
         }
         Log.i(TAG, "Media manager enabled")
+        emitStatus("媒体管理器已启用")
     }
 
     private fun disableMediaManager(mediaManager: IMediaManager) {
@@ -175,6 +295,7 @@ class VideoTransferManager(
 
     private fun pullLatestVideo(mediaManager: IMediaManager): MediaFile? {
         repeat(MAX_PULL_ATTEMPTS) { attempt ->
+            emitStatus("正在读取无人机 SD 卡文件列表，第 ${attempt + 1} 次尝试")
             val allFiles = pullMediaFileList(mediaManager)
             logPulledMediaFiles(allFiles, attempt + 1)
 
@@ -187,6 +308,7 @@ class VideoTransferManager(
 
             if (latestMp4 != null) {
                 Log.i(TAG, "Selected latest MP4: ${describeMediaFile(latestMp4)}")
+                emitStatus("已选中最新 MP4: ${latestMp4.getFileName()}")
                 return latestMp4
             }
 
@@ -198,6 +320,7 @@ class VideoTransferManager(
 
             if (latestVideoFallback != null) {
                 Log.w(TAG, "No MP4 found, fallback to latest video: ${describeMediaFile(latestVideoFallback)}")
+                emitStatus("未找到 MP4，回退为最新视频: ${latestVideoFallback.getFileName()}")
                 return latestVideoFallback
             }
 
@@ -252,16 +375,25 @@ class VideoTransferManager(
         val output = FileOutputStream(targetFile, false)
         val latch = CountDownLatch(1)
         val failureRef = AtomicReference<IDJIError?>()
+        var lastProgressPercent = -1L
 
         Log.i(TAG, "Downloading media file to ${targetFile.absolutePath}")
 
         mediaFile.pullOriginalMediaFileFromCamera(0L, object : MediaFileDownloadListener {
             override fun onStart() {
                 Log.i(TAG, "Media download started: ${mediaFile.getFileName()}")
+                emitStatus("开始下载 SD 卡视频: ${mediaFile.getFileName()}")
             }
 
             override fun onProgress(total: Long, current: Long) {
                 Log.d(TAG, "Media download progress: $current/$total")
+                if (total > 0L) {
+                    val percent = (current * 100L / total).coerceIn(0L, 100L)
+                    if (percent >= lastProgressPercent + 5 || percent == 100L) {
+                        lastProgressPercent = percent
+                        emitStatus("SD 卡拉取中: $percent%")
+                    }
+                }
             }
 
             override fun onRealtimeDataUpdate(data: ByteArray, position: Long) {
@@ -299,12 +431,18 @@ class VideoTransferManager(
         }
 
         Log.i(TAG, "Media download finished: ${targetFile.absolutePath}")
+        emitStatus("SD 卡拉取完成，准备上传前端")
         return targetFile
     }
 
     private fun uploadVideoFile(host: String, localFile: File, uploadFileName: String) {
         val encodedName = URLEncoder.encode(uploadFileName, StandardCharsets.UTF_8.name())
         val requestPath = "/upload2WRJ?file=$encodedName"
+        val totalBytes = localFile.length().coerceAtLeast(1L)
+        val uploadStartTimeMs = System.currentTimeMillis()
+        var uploadedBytes = 0L
+        var lastProgressPercent = -1L
+        var lastStatusEmitTimeMs = 0L
 
         Log.i(TAG, "Uploading latest video to http://$host:$UPLOAD_PORT$requestPath")
 
@@ -326,6 +464,20 @@ class VideoTransferManager(
                     val readCount = input.read(buffer)
                     if (readCount < 0) break
                     output.write(buffer, 0, readCount)
+                    uploadedBytes += readCount
+                    val percent = (uploadedBytes * 100L / totalBytes).coerceIn(0L, 100L)
+                    val now = System.currentTimeMillis()
+                    if (
+                        percent >= lastProgressPercent + STATUS_PROGRESS_STEP_PERCENT ||
+                        percent == 100L ||
+                        now - lastStatusEmitTimeMs >= STATUS_PROGRESS_INTERVAL_MS
+                    ) {
+                        lastProgressPercent = percent
+                        lastStatusEmitTimeMs = now
+                        emitStatus(
+                            "前端上传中: $percent% (${formatTransferRate(uploadedBytes, uploadStartTimeMs, now)})"
+                        )
+                    }
                 }
             }
         }.trim()
@@ -335,18 +487,57 @@ class VideoTransferManager(
         }
 
         Log.i(TAG, "Latest video upload succeeded with response=$response")
+        emitStatus("前端上传成功")
     }
 
-    private fun exportVideoToPublicDirectory(localFile: File, publicFileName: String) {
-        runCatching {
+    private fun exportVideoToPublicDirectory(localFile: File, publicFileName: String): Boolean {
+        return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 exportVideoViaMediaStore(localFile, publicFileName)
             } else {
                 exportVideoViaLegacyPublicDirectory(localFile, publicFileName)
             }
+            true
         }.onFailure { error ->
             Log.w(TAG, "Failed to export video to public directory: ${error.message}", error)
+        }.getOrDefault(false)
+    }
+
+    private fun deleteLocalWorkingFile(localFile: File) {
+        runCatching {
+            if (localFile.exists() && localFile.delete()) {
+                Log.i(TAG, "Deleted local working video after successful upload: ${localFile.absolutePath}")
+                emitStatus("已清理遥控器本地工作副本")
+            } else if (localFile.exists()) {
+                Log.w(TAG, "Failed to delete local working video: ${localFile.absolutePath}")
+            }
+        }.onFailure { error ->
+            Log.w(TAG, "Failed to delete local working video: ${error.message}", error)
         }
+    }
+
+    private fun cancelPendingCountdown() {
+        countdownFutureRef.getAndSet(null)?.cancel(false)
+    }
+
+    private fun formatTransferRate(transferredBytes: Long, startTimeMs: Long, nowTimeMs: Long): String {
+        val elapsedMs = (nowTimeMs - startTimeMs).coerceAtLeast(1L)
+        val bytesPerSecond = transferredBytes * 1000.0 / elapsedMs.toDouble()
+        val kiloBytes = 1024.0
+        val megaBytes = kiloBytes * 1024.0
+        return when {
+            bytesPerSecond >= megaBytes ->
+                String.format(Locale.US, "%.2f MB/s", bytesPerSecond / megaBytes)
+            bytesPerSecond >= kiloBytes ->
+                String.format(Locale.US, "%.1f KB/s", bytesPerSecond / kiloBytes)
+            else ->
+                String.format(Locale.US, "%.0f B/s", bytesPerSecond)
+        }
+    }
+
+    private fun emitStatus(message: String) {
+        Log.i(TAG, message)
+        statusCallback?.invoke(message)
     }
 
     private fun exportVideoViaMediaStore(localFile: File, publicFileName: String) {
