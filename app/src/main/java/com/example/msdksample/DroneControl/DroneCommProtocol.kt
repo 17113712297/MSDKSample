@@ -115,7 +115,7 @@ object DroneCommProtocol {
     const val CHECK_FAIL_REASON_GIMBAL_ERROR: Byte      = 0x03
     const val CHECK_FAIL_REASON_UNKNOWN: Byte           = 0xFF.toByte()
 
-    // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 // ★ 建图模式指令 (0x60-0x63，Android → Jetson)
 // ═══════════════════════════════════════════════════════
     const val CMD_MAPPING_SET_NAME: Byte = 0x60  // 设置地图名称
@@ -150,7 +150,6 @@ object DroneCommProtocol {
 // ═══════════════════════════════════════════════════════
     const val CMD_FILE_LIST_RESPONSE:   Byte = 0x90.toByte()  // 地图文件列表响应
     const val CMD_FILE_LIST_RESPONSE_WP: Byte = 0x91.toByte()  // 航线文件列表响应
-
     // ── 载荷长度常量 ─────────────────────────────────────
     const val VEL_PAYLOAD_LEN               = 16
     const val GIMBAL_YAW_FOLLOW_PAYLOAD_LEN = 8

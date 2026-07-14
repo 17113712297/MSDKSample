@@ -1,11 +1,8 @@
 package com.example.msdksample.devicereport
 
 import android.util.Log
-import java.io.BufferedInputStream
-import java.io.ByteArrayOutputStream
-import java.net.InetSocketAddress
-import java.net.URI
-import java.net.Socket
+import com.example.msdksample.network.MultipartHttpClient
+import com.example.msdksample.network.StreamAddressResolver
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -58,7 +55,7 @@ class DeviceStatusReportManager(
 
     private fun reportOnce() {
         val streamAddress = streamAddressProvider.invoke().trim()
-        val host = extractHost(streamAddress)
+        val host = StreamAddressResolver.extractHost(streamAddress)
         if (host.isNullOrBlank()) {
             Log.w(TAG, "Skip report because RTMP host is unavailable: $streamAddress")
             return
@@ -76,37 +73,8 @@ class DeviceStatusReportManager(
         }
     }
 
-    private fun extractHost(streamAddress: String): String? {
-        if (streamAddress.isBlank()) return null
-
-        val parsed = runCatching { URI(streamAddress).host }.getOrNull()
-        if (!parsed.isNullOrBlank()) {
-            return parsed
-        }
-
-        val normalized = streamAddress.removePrefix("rtmp://")
-        val hostPort = normalized.substringBefore("/").substringBefore("?")
-        return hostPort.substringBefore(":").ifBlank { null }
-    }
-
     private fun postMultipartJson(host: String, json: String): String {
-        val boundary = "----MSDKMerge${System.currentTimeMillis()}"
-        val lineBreak = "\r\n"
-        val bodyPrefix = buildString {
-            append("--").append(boundary).append(lineBreak)
-            append("Content-Disposition: form-data; name=\"file\"; filename=\"file.json\"")
-            append(lineBreak)
-            append("Content-Type: application/json; charset=UTF-8")
-            append(lineBreak).append(lineBreak)
-        }.toByteArray(StandardCharsets.UTF_8)
         val bodyJson = json.toByteArray(StandardCharsets.UTF_8)
-        val bodySuffix = (lineBreak + "--" + boundary + "--" + lineBreak)
-            .toByteArray(StandardCharsets.UTF_8)
-        val bodyBytes = ByteArrayOutputStream().apply {
-            write(bodyPrefix)
-            write(bodyJson)
-            write(bodySuffix)
-        }.toByteArray()
 
         val requestPath = buildString {
             append("/sendDeviceData")
@@ -115,52 +83,19 @@ class DeviceStatusReportManager(
             append("&file=file.json")
         }
 
-        Socket().use { socket ->
-            socket.soTimeout = READ_TIMEOUT_MS
-            socket.connect(InetSocketAddress(host, REPORT_PORT), CONNECT_TIMEOUT_MS)
-
-            val requestHeaders = buildString {
-                append("POST ").append(requestPath).append(" HTTP/1.1").append(lineBreak)
-                append("Host: ").append(host).append(":").append(REPORT_PORT).append(lineBreak)
-                append("Accept: application/json").append(lineBreak)
-                append("Connection: close").append(lineBreak)
-                append("Content-Type: multipart/form-data; boundary=").append(boundary)
-                    .append(lineBreak)
-                append("Content-Length: ").append(bodyBytes.size).append(lineBreak)
-                append(lineBreak)
-            }.toByteArray(StandardCharsets.UTF_8)
-
-            val output = socket.getOutputStream()
-            output.write(requestHeaders)
-            output.write(bodyBytes)
-            output.flush()
-
-            val responseBytes = ByteArrayOutputStream()
-            BufferedInputStream(socket.getInputStream()).use { input ->
-                val buffer = ByteArray(4096)
-                while (true) {
-                    val readCount = input.read(buffer)
-                    if (readCount < 0) break
-                    responseBytes.write(buffer, 0, readCount)
-                }
-            }
-
-            val responseText = responseBytes.toString(StandardCharsets.UTF_8.name())
-            val statusLine = responseText.lineSequence().firstOrNull().orEmpty()
-            val statusCode = statusLine
-                .split(" ")
-                .getOrNull(1)
-                ?.toIntOrNull()
-                ?: throw IllegalStateException("Invalid HTTP response: $statusLine")
-            val responseBody = responseText
-                .substringAfter("\r\n\r\n", "")
-                .trim()
-
-            if (statusCode !in 200..299) {
-                throw IllegalStateException("HTTP $statusCode $responseBody")
-            }
-
-            return responseBody.ifBlank { "HTTP $statusCode" }
+        return MultipartHttpClient.postMultipart(
+            host = host,
+            port = REPORT_PORT,
+            requestPath = requestPath,
+            accept = "application/json",
+            partFieldName = "file",
+            fileName = "file.json",
+            contentType = "application/json; charset=UTF-8",
+            contentLength = bodyJson.size.toLong(),
+            connectTimeoutMs = CONNECT_TIMEOUT_MS,
+            readTimeoutMs = READ_TIMEOUT_MS
+        ) { output ->
+            output.write(bodyJson)
         }
     }
 }

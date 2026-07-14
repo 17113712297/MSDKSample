@@ -3,6 +3,7 @@ setlocal
 
 set "SCRIPT_DIR=%~dp0"
 set "ADB=X:\Sdk\platform-tools\adb.exe"
+if not exist "%ADB%" set "ADB=X:\Sdk\platform-tools\adb.exe"
 set "APK=%SCRIPT_DIR%app\build\outputs\apk\debug\app-debug.apk"
 set "PACKAGE_NAME=com.example.msdksample"
 set "ACTIVITY_NAME=%PACKAGE_NAME%/.MainActivity"

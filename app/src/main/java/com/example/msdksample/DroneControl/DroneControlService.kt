@@ -37,7 +37,7 @@ class DroneControlService : Service() {
         @Volatile
         var landingController: LandingController? = null
 
-        // ★ 新增：模式控制器引用
+// ★ 新增：模式控制器引用
         @Volatile
         var modeController: ModeController? = null
 
@@ -46,6 +46,8 @@ class DroneControlService : Service() {
         var onStartCameraStream: (() -> Unit)? = null
         @Volatile
         var onStopCameraStream: (() -> Unit)? = null
+        @Volatile
+        var onEnqueueLatestVideoTransfer: (() -> Unit)? = null
 
         // ⭐【新增控制点】：显式暴露给 MainActivity 的视觉重置闭包，确保在状态机跳转前清除黏性锁
         @Volatile
@@ -246,6 +248,9 @@ class DroneControlService : Service() {
                 Log.i(TAG, "CAM_RECORD ${if (p.isStart) "START" else "STOP"}")
                 val callback: (Boolean, String) -> Unit = { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_CAM_RECORD, ackOf(ok))
+                    if (ok && p.isStop) {
+                        onEnqueueLatestVideoTransfer?.invoke()
+                    }
                 }
                 if (p.isStart) cameraCtrl.startRecord(callback)
                 else           cameraCtrl.stopRecord(callback)

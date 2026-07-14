@@ -20,6 +20,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.example.msdksample.devicereport.DeviceStatusReportManager
+import com.example.msdksample.transfer.VideoTransferManager
+import dji.sdk.keyvalue.key.DJIKey
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.key.KeyTools
@@ -55,6 +57,9 @@ class MainActivity : AppCompatActivity() {
         const val POLL_INTERVAL = 500L
         const val AUTO_STREAM_RETRY_DELAY_MS = 3_000L
         const val AUTO_STREAM_MAX_ATTEMPTS = 10
+        const val VISUAL_LAND_CONFIRM_POLL_MS = 500L
+        const val VISUAL_LAND_CONFIRM_TIMEOUT_MS = 20_000L
+        const val VISUAL_LAND_GROUNDED_POLLS_REQUIRED = 2
     }
 
     private lateinit var fpvWidget: FPVWidget
@@ -81,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var zSpeedText: TextView
     private lateinit var yawRateText: TextView
     private lateinit var remainingTimeText: TextView
+    private lateinit var transferDebugText: TextView
     private lateinit var liveStreamLayout: LinearLayout
     private lateinit var liveStreamAddressText: TextView
     private lateinit var liveStreamStatusText: TextView
@@ -116,7 +122,7 @@ class MainActivity : AppCompatActivity() {
     private var visionController: VisionController? = null
     private lateinit var liveStreamController: LiveStreamController
     private lateinit var deviceStatusReportManager: DeviceStatusReportManager
-    private lateinit var landingController: LandingController
+private lateinit var landingController: LandingController
     private lateinit var preflightController: PreflightController
 
     // ★ 新模式控制器
@@ -124,6 +130,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnModeMapping: Button
     private lateinit var btnModeCollect: Button
     private lateinit var btnModeCruise: Button
+    private lateinit var videoTransferManager: VideoTransferManager
     @Volatile private var currentTargetId = -1
     @Volatile private var previousLandingState: TaskState = TaskState.INACTIVE
 
@@ -132,8 +139,12 @@ class MainActivity : AppCompatActivity() {
     private var autoStreamStopped = false
     private var liveStreamTouchedByUser = false
     private var isLiveStreamPanelVisible = false
+    private var recordingMonitorKey: DJIKey<Boolean>? = null
+    private var lastRecordingState: Boolean? = null
+    @Volatile private var awaitingVisualLandConfirmation = false
 
     private val pollHandler = Handler(Looper.getMainLooper())
+    private val visualLandingHandler = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
         override fun run() {
             pollVelocity()
@@ -164,6 +175,7 @@ class MainActivity : AppCompatActivity() {
                         liveStreamController.updateLiveStreamCameraSource(source)
                         liveStreamController.refreshConfiguredStreamAddress()
                     }
+                    registerRecordingStateListener()
                     if (::landingController.isInitialized) {
                         landingController.currentCameraIndex = source
                     }
@@ -192,6 +204,14 @@ class MainActivity : AppCompatActivity() {
             deviceStatusReportManager = DeviceStatusReportManager {
                 liveStreamController.getConfiguredStreamAddress()
             }
+            videoTransferManager = VideoTransferManager(
+                context = applicationContext,
+                streamAddressProvider = { liveStreamController.getConfiguredStreamAddress() },
+                cameraIndexProvider = { currentCameraIndex }
+            )
+            videoTransferManager.statusCallback = { status ->
+                runOnUiThread { renderTransferDebugStatus(status) }
+            }
             setupLiveStreamController()
             deviceStatusReportManager.start()
             landingController = LandingController()
@@ -204,6 +224,20 @@ class MainActivity : AppCompatActivity() {
             modeController = ModeController()
             DroneControlService.modeController = modeController
             setupModeController()
+
+            DroneControlService.onStartCameraStream = {
+                runOnUiThread {
+                    ensureVisionSystemReady()
+                    visionController?.resetTracking()
+                    testCameraController?.startVideoStream()
+                }
+            }
+            DroneControlService.onResetVisionTracking = {
+                visionController?.resetTracking()
+            }
+            DroneControlService.onStopCameraStream = {
+                runCatching { testCameraController?.stopVideoStream() }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Controller init failed", e)
             showErrorOnUI("控制器初始化失败，请确保飞机已连接")
@@ -233,7 +267,6 @@ class MainActivity : AppCompatActivity() {
         btnModeMapping.setOnClickListener { showMappingDialog() }
         btnModeCollect.setOnClickListener { showCollectDialog() }
         btnModeCruise.setOnClickListener { showCruiseDialog() }
-
         // ═══════════════════════════════════════════════════════
         // ★ 速度控制面板初始化
         // ═══════════════════════════════════════════════════════
@@ -253,6 +286,7 @@ class MainActivity : AppCompatActivity() {
             liveStreamController.refreshConfiguredStreamAddress()
             scheduleAutoStartLiveStream()
         }
+        registerRecordingStateListener()
 
         compositeDisposable = CompositeDisposable()
         compositeDisposable?.add(
@@ -288,6 +322,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
+        visualLandingHandler.removeCallbacksAndMessages(null)
         MediaDataCenter.getInstance()
             .getCameraStreamManager()
             .removeAvailableCameraUpdatedListener(availableCameraUpdatedListener)
@@ -298,6 +333,15 @@ class MainActivity : AppCompatActivity() {
         if (::deviceStatusReportManager.isInitialized) {
             deviceStatusReportManager.stop()
         }
+        unregisterRecordingStateListener()
+        if (::videoTransferManager.isInitialized) {
+            videoTransferManager.statusCallback = null
+            videoTransferManager.release()
+        }
+        DroneControlService.onEnqueueLatestVideoTransfer = null
+        DroneControlService.onStartCameraStream = null
+        DroneControlService.onStopCameraStream = null
+        DroneControlService.onResetVisionTracking = null
         if (::landingController.isInitialized) landingController.release()
         if (::preflightController.isInitialized) preflightController.release()
         visionController?.release()
@@ -416,12 +460,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (state == TaskState.INACTIVE && previousLandingState == TaskState.LANDING) {
                 previousLandingState = TaskState.INACTIVE
-                runCatching {
-                    val frame = DroneCommProtocol.encodeSimple(
-                        DroneCommProtocol.CMD_ACK_LAND_COMPLETE
-                    )
-                    DroneControlService.sendFrame(frame)
-                }
+                DroneControlService.onStopCameraStream?.invoke()
             }
         }
 
@@ -429,6 +468,9 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { showErrorOnUI(msg) }
         }
         landingController.onMessage = { msg ->
+            if (isVisualLandingSuccessMessage(msg)) {
+                awaitVisualLandingConfirmation()
+            }
             runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
         }
 
@@ -450,6 +492,7 @@ class MainActivity : AppCompatActivity() {
                 yawRateText.textSize = 14f
                 Toast.makeText(this, "安全检查通过", Toast.LENGTH_LONG).show()
             }
+            DroneControlService.onStopCameraStream?.invoke()
             runCatching {
                 val frame = DroneCommProtocol.encodeSimple(
                     DroneCommProtocol.CMD_ACK_CHECK_PASSED
@@ -464,6 +507,7 @@ class MainActivity : AppCompatActivity() {
                 btnTakeoff?.text = "重新检查"
                 showErrorOnUI(reason)
             }
+            DroneControlService.onStopCameraStream?.invoke()
             runCatching {
                 val reasonCode: Byte = when {
                     reason.contains("夹爪", ignoreCase = true) ||
@@ -585,6 +629,7 @@ class MainActivity : AppCompatActivity() {
         zSpeedText = findViewById(R.id.zSpeedText)
         yawRateText = findViewById(R.id.yawRateText)
         remainingTimeText = findViewById(R.id.remainingTimeText)
+        transferDebugText = findViewById(R.id.transferDebugText)
         liveStreamLayout = findViewById(R.id.liveStreamLayout)
         liveStreamAddressText = findViewById(R.id.liveStreamAddressText)
         liveStreamStatusText = findViewById(R.id.liveStreamStatusText)
@@ -750,6 +795,19 @@ class MainActivity : AppCompatActivity() {
         yawRateText.text = "0.0"
     }
 
+private fun renderTransferDebugStatus(message: String) {
+        transferDebugText.visibility = View.VISIBLE
+        transferDebugText.text = message
+        val color = when {
+            message.contains("失败") || message.contains("未确认") || message.contains("异常") ->
+                0xFFFFCDD2.toInt()
+            message.contains("完成") || message.contains("成功") ->
+                0xFFC8E6C9.toInt()
+            else -> 0xFFFFFFFF.toInt()
+        }
+        transferDebugText.setTextColor(color)
+    }
+
     private fun reattachStatusWidgets() {
         Log.d(TAG_SDK, "重新挂载顶栏 Widget...")
         listOf(
@@ -794,7 +852,92 @@ class MainActivity : AppCompatActivity() {
         liveStreamAddressInput.setText(liveStreamController.getConfiguredStreamAddress())
     }
 
-    private fun setupLiveStreamButton() {
+private fun registerRecordingStateListener() {
+        unregisterRecordingStateListener()
+        val key = KeyTools.createKey(CameraKey.KeyIsRecording, currentCameraIndex)
+        recordingMonitorKey = key
+        lastRecordingState = KeyManager.getInstance().getValue(key)
+        Log.i(TAG, "Register recording listener on camera index=$currentCameraIndex initial=$lastRecordingState")
+        runCatching {
+            KeyManager.getInstance().listen(key, this, true) { oldValue, newValue ->
+                val current = newValue ?: oldValue ?: false
+                val previous = lastRecordingState
+                Log.d(TAG, "Recording state update old=$oldValue new=$newValue previous=$previous current=$current")
+                if (previous == true && current == false && ::videoTransferManager.isInitialized) {
+                    Log.i(TAG, "Recording transitioned to stopped, enqueue latest video transfer")
+                    videoTransferManager.enqueueLatestVideoTransferAfterRecordStop()
+                }
+                lastRecordingState = current
+            }
+        }.onFailure {
+            Log.w(TAG, "Failed to register recording listener: ${it.message}")
+        }
+    }
+
+    private fun unregisterRecordingStateListener() {
+        val key = recordingMonitorKey ?: return
+        Log.i(TAG, "Unregister recording listener")
+        runCatching { KeyManager.getInstance().cancelListen(key, this) }
+        recordingMonitorKey = null
+        lastRecordingState = null
+    }
+
+    private fun isVisualLandingSuccessMessage(message: String): Boolean {
+        return message.contains("自动直降完成") || message.contains("强制停桨完成")
+    }
+
+    private fun awaitVisualLandingConfirmation() {
+        if (awaitingVisualLandConfirmation) {
+            Log.i(TAG, "Visual landing confirmation is already in progress")
+            return
+        }
+
+        awaitingVisualLandConfirmation = true
+        val startTimeMs = System.currentTimeMillis()
+        var groundedPollCount = 0
+
+        val poll = object : Runnable {
+            override fun run() {
+                val isFlying = runCatching {
+                    KeyManager.getInstance().getValue(
+                        KeyTools.createKey(FlightControllerKey.KeyIsFlying)
+                    ) ?: false
+                }.getOrDefault(true)
+
+                groundedPollCount = if (!isFlying) groundedPollCount + 1 else 0
+
+                if (groundedPollCount >= VISUAL_LAND_GROUNDED_POLLS_REQUIRED) {
+                    awaitingVisualLandConfirmation = false
+                    Log.i(TAG, "Visual landing confirmed by KeyIsFlying=false")
+                    handleVisualLandingConfirmed()
+                    return
+                }
+
+                if (System.currentTimeMillis() - startTimeMs >= VISUAL_LAND_CONFIRM_TIMEOUT_MS) {
+                    awaitingVisualLandConfirmation = false
+                    val msg = "视觉降落任务已结束，但未确认无人机已落地，未发送完成通知"
+                    Log.w(TAG, msg)
+                    runOnUiThread { showErrorOnUI(msg) }
+                    return
+                }
+
+                visualLandingHandler.postDelayed(this, VISUAL_LAND_CONFIRM_POLL_MS)
+            }
+        }
+
+        visualLandingHandler.post(poll)
+    }
+
+    private fun handleVisualLandingConfirmed() {
+        runCatching {
+            val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_ACK_LAND_COMPLETE)
+            DroneControlService.sendFrame(frame)
+        }.onFailure {
+            Log.w(TAG, "Failed to send visual landing completion ACK: ${it.message}")
+        }
+    }
+
+private fun setupLiveStreamButton() {
         btnLiveStreamPanel.setOnClickListener {
             toggleLiveStreamPanel()
         }
