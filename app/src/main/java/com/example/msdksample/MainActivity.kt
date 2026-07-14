@@ -8,11 +8,15 @@ import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.example.msdksample.devicereport.DeviceStatusReportManager
@@ -114,6 +118,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceStatusReportManager: DeviceStatusReportManager
     private lateinit var landingController: LandingController
     private lateinit var preflightController: PreflightController
+
+    // ★ 新模式控制器
+    private lateinit var modeController: ModeController
+    private lateinit var btnModeMapping: Button
+    private lateinit var btnModeCollect: Button
+    private lateinit var btnModeCruise: Button
     @Volatile private var currentTargetId = -1
     @Volatile private var previousLandingState: TaskState = TaskState.INACTIVE
 
@@ -189,6 +199,11 @@ class MainActivity : AppCompatActivity() {
             setupControllerCallbacks()
             DroneControlService.preflightController = preflightController
             DroneControlService.landingController = landingController
+
+            // ★ 初始化模式控制器
+            modeController = ModeController()
+            DroneControlService.modeController = modeController
+            setupModeController()
         } catch (e: Exception) {
             Log.e(TAG, "Controller init failed", e)
             showErrorOnUI("控制器初始化失败，请确保飞机已连接")
@@ -213,6 +228,11 @@ class MainActivity : AppCompatActivity() {
 
         btnAutoLanding?.setOnClickListener { onLandingClicked() }
         btnTakeoff?.setOnClickListener { onTakeoffClicked() }
+
+        // ★ 模式按钮点击
+        btnModeMapping.setOnClickListener { showMappingDialog() }
+        btnModeCollect.setOnClickListener { showCollectDialog() }
+        btnModeCruise.setOnClickListener { showCruiseDialog() }
 
         // ═══════════════════════════════════════════════════════
         // ★ 速度控制面板初始化
@@ -573,6 +593,11 @@ class MainActivity : AppCompatActivity() {
 
         btnAutoLanding = findViewById(R.id.btnAutoLanding)
         btnTakeoff = findViewById(R.id.btnTakeoff)
+
+        // ★ 模式按钮
+        btnModeMapping = findViewById(R.id.btnModeMapping)
+        btnModeCollect = findViewById(R.id.btnModeCollect)
+        btnModeCruise = findViewById(R.id.btnModeCruise)
 
         // ═══════════════════════════════════════════════════════
         // ★ 速度控制面板按钮绑定
@@ -997,5 +1022,393 @@ class MainActivity : AppCompatActivity() {
         CameraVideoStreamSourceType.ZOOM_CAMERA -> DroneCommProtocol.CAM_LENS_ZOOM
         CameraVideoStreamSourceType.INFRARED_CAMERA -> DroneCommProtocol.CAM_LENS_INFRARED
         else -> DroneCommProtocol.CAM_LENS_WIDE
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // ★ 模式控制
+    // ═══════════════════════════════════════════════════════
+
+    private fun setupModeController() {
+        modeController.onMappingStateChanged = { state ->
+            runOnUiThread {
+                when (state) {
+                    ModeController.MappingState.IDLE -> Log.i(TAG, "建图状态: 空闲")
+                    ModeController.MappingState.RUNNING -> Log.i(TAG, "建图状态: 运行中")
+                    ModeController.MappingState.SAVED -> Log.i(TAG, "建图状态: 已保存")
+                    else -> {}
+                }
+            }
+        }
+
+        modeController.onCollectStateChanged = { state ->
+            runOnUiThread {
+                when (state) {
+                    ModeController.CollectState.IDLE -> Log.i(TAG, "采点状态: 空闲")
+                    ModeController.CollectState.RUNNING -> Log.i(TAG, "采点状态: 采点中")
+                    ModeController.CollectState.MAP_2D_DONE -> Log.i(TAG, "采点状态: 2D已生成")
+                    ModeController.CollectState.PIXEL_DONE -> Log.i(TAG, "采点状态: 像素已生成")
+                    else -> {}
+                }
+            }
+        }
+
+        modeController.onCruiseStateChanged = { state ->
+            runOnUiThread {
+                when (state) {
+                    ModeController.CruiseState.IDLE -> Log.i(TAG, "巡航状态: 空闲")
+                    ModeController.CruiseState.MAP_SET -> Log.i(TAG, "巡航状态: 地图已设置")
+                    ModeController.CruiseState.WP_SET -> Log.i(TAG, "巡航状态: 航线已设置")
+                    ModeController.CruiseState.READY -> Log.i(TAG, "巡航状态: 已起飞")
+                    else -> {}
+                }
+            }
+        }
+
+        modeController.onLogMessage = { msg ->
+            runOnUiThread {
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun showMappingDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_mapping, null)
+        val etMapName = dialogView.findViewById<EditText>(R.id.etMappingMapName)
+        val btnStart = dialogView.findViewById<Button>(R.id.btnMappingStart)
+        val btnSave = dialogView.findViewById<Button>(R.id.btnMappingSave)
+        val btnStop = dialogView.findViewById<Button>(R.id.btnMappingStop)
+        val btnClose = dialogView.findViewById<Button>(R.id.btnMappingClose)
+        val tvStatus = dialogView.findViewById<TextView>(R.id.tvMappingStatus)
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setCancelable(false)
+            .create()
+
+        // 状态更新
+        val updateUi = { state: ModeController.MappingState ->
+            runOnUiThread {
+                when (state) {
+                    ModeController.MappingState.IDLE -> {
+                        btnStart.isEnabled = true
+                        btnSave.isEnabled = false
+                        btnStop.isEnabled = false
+                        tvStatus.text = "● 就绪"
+                        tvStatus.setTextColor(0xFFAAAAAA.toInt())
+                    }
+                    ModeController.MappingState.RUNNING -> {
+                        btnStart.isEnabled = false
+                        btnSave.isEnabled = true
+                        btnStop.isEnabled = true
+                        tvStatus.text = "● 建图中..."
+                        tvStatus.setTextColor(0xFF4CAF50.toInt())
+                    }
+                    ModeController.MappingState.SAVED -> {
+                        btnStart.isEnabled = false
+                        btnSave.isEnabled = true
+                        btnStop.isEnabled = true
+                        tvStatus.text = "● 已保存"
+                        tvStatus.setTextColor(0xFF1976D2.toInt())
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        // 监听状态变更
+        modeController.onMappingStateChanged = { state ->
+            updateUi(state)
+        }
+
+        // 初始状态
+        updateUi(modeController.mappingState)
+
+        btnStart.setOnClickListener {
+            val name = etMapName.text.toString().trim()
+            if (name.isNotEmpty()) {
+                modeController.mappingSetName(name)
+            }
+            modeController.mappingStart()
+        }
+
+        btnSave.setOnClickListener {
+            val name = etMapName.text.toString().trim()
+            modeController.mappingSaveMap(name)
+        }
+
+        btnStop.setOnClickListener {
+            modeController.mappingStop()
+            updateUi(ModeController.MappingState.IDLE)
+        }
+
+        btnClose.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.setOnDismissListener {
+            // 恢复全局回调
+            modeController.onMappingStateChanged = { state ->
+                runOnUiThread {
+                    when (state) {
+                        ModeController.MappingState.IDLE -> Log.i(TAG, "建图状态: 空闲")
+                        ModeController.MappingState.RUNNING -> Log.i(TAG, "建图状态: 运行中")
+                        ModeController.MappingState.SAVED -> Log.i(TAG, "建图状态: 已保存")
+                        else -> {}
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun showCollectDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_collect, null)
+        val spMap = dialogView.findViewById<Spinner>(R.id.spCollectMap)
+        val etWpName = dialogView.findViewById<EditText>(R.id.etCollectWpName)
+        val btnRefreshMap = dialogView.findViewById<Button>(R.id.btnCollectRefreshMap)
+        val btnApplyMap = dialogView.findViewById<Button>(R.id.btnCollectApplyMap)
+        val btnApplyWpName = dialogView.findViewById<Button>(R.id.btnCollectApplyWpName)
+        val btnStart = dialogView.findViewById<Button>(R.id.btnCollectStart)
+        val btnRecord = dialogView.findViewById<Button>(R.id.btnCollectRecord)
+        val btnSave = dialogView.findViewById<Button>(R.id.btnCollectSave)
+        val btnGen2D = dialogView.findViewById<Button>(R.id.btnCollectGen2D)
+        val btnGenPixel = dialogView.findViewById<Button>(R.id.btnCollectGenPixel)
+        val btnStop = dialogView.findViewById<Button>(R.id.btnCollectStop)
+        val btnClose = dialogView.findViewById<Button>(R.id.btnCollectClose)
+        val tvStatus = dialogView.findViewById<TextView>(R.id.tvCollectStatus)
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setCancelable(false)
+            .create()
+
+        val waypointCtrl = WaypointController()
+
+        // 地图 Spinner 适配器
+        val mapAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf<String>()).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        spMap.adapter = mapAdapter
+
+        // 状态更新回调
+        val updateUi = { state: ModeController.CollectState ->
+            runOnUiThread {
+                when (state) {
+                    ModeController.CollectState.IDLE -> {
+                        btnStart.isEnabled = true
+                        btnRecord.isEnabled = false
+                        btnSave.isEnabled = false
+                        btnGen2D.isEnabled = false
+                        btnGenPixel.isEnabled = false
+                        btnStop.isEnabled = false
+                        tvStatus.text = "● 就绪"
+                        tvStatus.setTextColor(0xFFAAAAAA.toInt())
+                    }
+                    ModeController.CollectState.RUNNING -> {
+                        btnStart.isEnabled = false
+                        btnRecord.isEnabled = true
+                        btnSave.isEnabled = true
+                        btnGen2D.isEnabled = true
+                        btnGenPixel.isEnabled = true
+                        btnStop.isEnabled = true
+                        tvStatus.text = "● 采点中..."
+                        tvStatus.setTextColor(0xFF4CAF50.toInt())
+                    }
+                    ModeController.CollectState.MAP_2D_DONE -> {
+                        // 保持可用，可重复操作
+                        btnStart.isEnabled = false
+                        btnRecord.isEnabled = true
+                        btnSave.isEnabled = true
+                        btnGen2D.isEnabled = true
+                        btnGenPixel.isEnabled = true
+                        btnStop.isEnabled = true
+                        tvStatus.text = "● 2D地图已生成"
+                        tvStatus.setTextColor(0xFF1976D2.toInt())
+                    }
+                    ModeController.CollectState.PIXEL_DONE -> {
+                        // 保持可用，可重复操作
+                        btnStart.isEnabled = false
+                        btnRecord.isEnabled = true
+                        btnSave.isEnabled = true
+                        btnGen2D.isEnabled = true
+                        btnGenPixel.isEnabled = true
+                        btnStop.isEnabled = true
+                        tvStatus.text = "● 像素坐标已生成"
+                        tvStatus.setTextColor(0xFF1976D2.toInt())
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        modeController.onCollectStateChanged = { state -> updateUi(state) }
+        updateUi(modeController.collectState)
+
+        // 文件列表更新回调 → 刷新地图 Spinner
+        modeController.onFileListUpdated = {
+            runOnUiThread {
+                mapAdapter.clear()
+                mapAdapter.addAll(modeController.mapFileList)
+                mapAdapter.notifyDataSetChanged()
+                if (modeController.mapFileList.isNotEmpty()) {
+                    spMap.setSelection(0)
+                }
+            }
+        }
+
+        // 初始加载地图列表
+        modeController.listMaps()
+
+        // ── 按钮事件 ─────────────────────────────────────────
+        btnRefreshMap.setOnClickListener { modeController.listMaps() }
+
+        btnApplyMap.setOnClickListener {
+            val mapFile = spMap.selectedItem?.toString() ?: return@setOnClickListener
+            modeController.collectSetMap(mapFile)
+        }
+
+        btnApplyWpName.setOnClickListener {
+            val wpName = etWpName.text.toString().trim()
+            if (wpName.isNotEmpty()) {
+                modeController.collectSetWpName(wpName)
+            }
+        }
+
+        btnStart.setOnClickListener {
+            val mapFile = spMap.selectedItem?.toString()
+            val wpName = etWpName.text.toString().trim()
+            if (mapFile != null) modeController.collectSetMap(mapFile)
+            if (wpName.isNotEmpty()) modeController.collectSetWpName(wpName)
+            modeController.collectStart()
+        }
+
+        btnRecord.setOnClickListener { waypointCtrl.recordWaypoint() }
+        btnSave.setOnClickListener { waypointCtrl.saveWaypoints() }
+        btnGen2D.setOnClickListener { modeController.collectGen2D() }
+        btnGenPixel.setOnClickListener { modeController.collectGenPixel() }
+
+        btnStop.setOnClickListener {
+            modeController.collectStop()
+            updateUi(ModeController.CollectState.IDLE)
+        }
+
+        btnClose.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.setOnDismissListener {
+            modeController.onCollectStateChanged = { state ->
+                runOnUiThread {
+                    when (state) {
+                        ModeController.CollectState.IDLE -> Log.i(TAG, "采点状态: 空闲")
+                        ModeController.CollectState.RUNNING -> Log.i(TAG, "采点状态: 采点中")
+                        ModeController.CollectState.MAP_2D_DONE -> Log.i(TAG, "采点状态: 2D已生成")
+                        ModeController.CollectState.PIXEL_DONE -> Log.i(TAG, "采点状态: 像素已生成")
+                        else -> {}
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun showCruiseDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_cruise, null)
+        val etServer = dialogView.findViewById<EditText>(R.id.etCruiseServer)
+        val etGimbalPitch = dialogView.findViewById<EditText>(R.id.etCruiseGimbalPitch)
+        val btnSetGimbalPitch = dialogView.findViewById<Button>(R.id.btnCruiseSetGimbalPitch)
+        val spWp = dialogView.findViewById<Spinner>(R.id.spCruiseWp)
+        val btnRefreshWp = dialogView.findViewById<Button>(R.id.btnCruiseRefreshWp)
+        val btnSelectWp = dialogView.findViewById<Button>(R.id.btnCruiseSelectWp)
+        val btnStart = dialogView.findViewById<Button>(R.id.btnCruiseStart)
+        val btnClose = dialogView.findViewById<Button>(R.id.btnCruiseClose)
+        val tvStatus = dialogView.findViewById<TextView>(R.id.tvCruiseStatus)
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setCancelable(false)
+            .create()
+
+        val wpAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf<String>()).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        spWp.adapter = wpAdapter
+
+        fun setStatus(text: String, color: Int = 0xFFAAAAAA.toInt()) {
+            runOnUiThread {
+                tvStatus.text = text
+                tvStatus.setTextColor(color)
+            }
+        }
+
+        fun refreshWaypoints() {
+            modeController.listWaypoints()
+        }
+
+        // 文件列表更新回调 → 刷新航线 Spinner
+        modeController.onFileListUpdated = {
+            runOnUiThread {
+                wpAdapter.clear()
+                wpAdapter.addAll(modeController.waypointFileList)
+                wpAdapter.notifyDataSetChanged()
+                if (modeController.waypointFileList.isNotEmpty()) {
+                    spWp.setSelection(0)
+                }
+            }
+        }
+
+        // 初始加载航线列表
+        refreshWaypoints()
+
+        btnRefreshWp.setOnClickListener { refreshWaypoints() }
+
+        // 服务器地址变更时发到 mode_manager 存储
+        etServer.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                val addr = etServer.text.toString().trim()
+                if (addr.isNotEmpty()) {
+                    modeController.cruiseSetServer(addr)
+                }
+            }
+        }
+        // 打开弹窗时先发一次当前地址
+        val initialAddr = etServer.text.toString().trim()
+        if (initialAddr.isNotEmpty()) {
+            modeController.cruiseSetServer(initialAddr)
+        }
+
+        // 云台俯仰角 → 点击"应用"按钮后发送到 mode_manager 存储
+        btnSetGimbalPitch.setOnClickListener {
+            val pitch = etGimbalPitch.text.toString().trim()
+            if (pitch.isNotEmpty()) {
+                modeController.cruiseSetGimbalPitch(pitch)
+                setStatus("云台角度已设为 ${pitch}°", 0xFF4CAF50.toInt())
+            }
+        }
+
+        // 选择航线 → 通过 PSDK 发到 mode_manager，由它调用 airlineInfo API
+        btnSelectWp.setOnClickListener {
+            val wpName = spWp.selectedItem?.toString() ?: return@setOnClickListener
+            setStatus("正在选择航线...", 0xFFFF9800.toInt())
+            modeController.cruiseSelectWp(wpName)
+        }
+
+        // 开始巡航 → 通过 PSDK 发到 mode_manager，由它调用 sendCommand API
+        btnStart.setOnClickListener {
+            setStatus("正在发送起飞指令...", 0xFFFF9800.toInt())
+            btnStart.isEnabled = false
+            modeController.cruiseStart()
+            btnStart.text = "起飞指令已发送"
+        }
+
+        btnClose.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.setOnDismissListener { }
+
+        dialog.show()
     }
 }

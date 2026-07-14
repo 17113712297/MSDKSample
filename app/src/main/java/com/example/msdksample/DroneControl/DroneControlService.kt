@@ -37,6 +37,10 @@ class DroneControlService : Service() {
         @Volatile
         var landingController: LandingController? = null
 
+        // ★ 新增：模式控制器引用
+        @Volatile
+        var modeController: ModeController? = null
+
         // 用于触发 MainActivity 开启/关闭视觉流的闭包
         @Volatile
         var onStartCameraStream: (() -> Unit)? = null
@@ -343,6 +347,52 @@ class DroneControlService : Service() {
                     android.widget.Toast.makeText(
                         this, resultMsg, android.widget.Toast.LENGTH_SHORT
                     ).show()
+                }
+            }
+
+            // ── ★ 通用 ACK 处理 ────────────────────────────────────
+            // ControllerHardware 发回的 ACK 帧 cmd=CMD_ACK(0x80)，原始指令码在 payload[0]
+            DroneCommProtocol.CMD_ACK -> {
+                if (frame.payload.size >= 2) {
+                    val originalCmd = frame.payload[0]
+                    val ok = frame.payload[1] == DroneCommProtocol.ACK_OK
+                    val cmdName = when (originalCmd.toInt() and 0xFF) {
+                        DroneCommProtocol.CMD_MAPPING_START.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_MAPPING_SAVE_MAP.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_MAPPING_STOP.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_COLLECT_START.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_COLLECT_GEN_2D.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_COLLECT_GEN_PIXEL.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_COLLECT_STOP.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_CRUISE_START.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_CRUISE_SELECT_WP.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_CRUISE_SET_SERVER.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_CRUISE_SET_GIMBAL_PITCH.toInt() and 0xFF -> "mode"
+                        else -> null
+                    }
+                    if (cmdName != null) {
+                        mainHandler.post {
+                            modeController?.onCommandAck(originalCmd, ok)
+                        }
+                    }
+                }
+            }
+
+            // ── ★ 文件列表响应 ─────────────────────────────────
+            DroneCommProtocol.CMD_FILE_LIST_RESPONSE -> {
+                val fileList = String(frame.payload, Charsets.UTF_8)
+                Log.i(TAG, "MAP FILE_LIST_RESPONSE: $fileList")
+                mainHandler.post {
+                    modeController?.onFileListResponse(fileList, isMap = true)
+                }
+            }
+
+            // ── ★ 航线文件列表响应 ────────────────────────────
+            DroneCommProtocol.CMD_FILE_LIST_RESPONSE_WP -> {
+                val fileList = String(frame.payload, Charsets.UTF_8)
+                Log.i(TAG, "WP FILE_LIST_RESPONSE: $fileList")
+                mainHandler.post {
+                    modeController?.onFileListResponse(fileList, isMap = false)
                 }
             }
 

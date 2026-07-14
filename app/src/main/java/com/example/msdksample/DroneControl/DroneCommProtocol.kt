@@ -115,6 +115,42 @@ object DroneCommProtocol {
     const val CHECK_FAIL_REASON_GIMBAL_ERROR: Byte      = 0x03
     const val CHECK_FAIL_REASON_UNKNOWN: Byte           = 0xFF.toByte()
 
+    // ═══════════════════════════════════════════════════════
+// ★ 建图模式指令 (0x60-0x63，Android → Jetson)
+// ═══════════════════════════════════════════════════════
+    const val CMD_MAPPING_SET_NAME: Byte = 0x60  // 设置地图名称
+    const val CMD_MAPPING_START:    Byte = 0x61  // 启动雷达+建图
+    const val CMD_MAPPING_SAVE_MAP: Byte = 0x62  // 保存地图
+    const val CMD_MAPPING_STOP:     Byte = 0x63  // 停止雷达+建图
+    const val CMD_LIST_MAPS:        Byte = 0x64  // 获取地图文件列表
+
+    // ═══════════════════════════════════════════════════════
+// ★ 采点模式指令 (0x65-0x6A，Android → Jetson)
+// ═══════════════════════════════════════════════════════
+    const val CMD_COLLECT_SET_MAP:     Byte = 0x65  // 设置定位地图
+    const val CMD_COLLECT_SET_WP_NAME: Byte = 0x66  // 设置航点文件名
+    const val CMD_COLLECT_START:       Byte = 0x67  // 启动雷达+定位+记录器
+    const val CMD_COLLECT_GEN_2D:      Byte = 0x68  // 生成2D地图
+    const val CMD_COLLECT_GEN_PIXEL:   Byte = 0x69  // 生成像素坐标
+    const val CMD_COLLECT_STOP:        Byte = 0x6A  // 停止雷达+定位+记录器
+
+    // ═══════════════════════════════════════════════════════
+// ★ 巡航模式指令 (0x6B-0x6D，Android → Jetson)
+// ═══════════════════════════════════════════════════════
+    const val CMD_CRUISE_SET_MAP: Byte = 0x6B  // 设置定位地图
+    const val CMD_CRUISE_SET_WP:  Byte = 0x6C  // 设置航线文件
+    const val CMD_CRUISE_START:   Byte = 0x6D  // 触发 HTTP 起飞指令
+    const val CMD_LIST_WAYPOINTS: Byte = 0x6E  // 获取航线文件列表
+    const val CMD_CRUISE_SELECT_WP: Byte = 0x6F  // 选择航线（调用 airlineInfo API）
+    const val CMD_CRUISE_SET_SERVER: Byte = 0x70  // 设置巡航服务器地址
+    const val CMD_CRUISE_SET_GIMBAL_PITCH: Byte = 0x71  // 设置云台俯仰角
+
+    // ═══════════════════════════════════════════════════════
+// ★ 响应指令 (0x90，Jetson → Android)
+// ═══════════════════════════════════════════════════════
+    const val CMD_FILE_LIST_RESPONSE:   Byte = 0x90.toByte()  // 地图文件列表响应
+    const val CMD_FILE_LIST_RESPONSE_WP: Byte = 0x91.toByte()  // 航线文件列表响应
+
     // ── 载荷长度常量 ─────────────────────────────────────
     const val VEL_PAYLOAD_LEN               = 16
     const val GIMBAL_YAW_FOLLOW_PAYLOAD_LEN = 8

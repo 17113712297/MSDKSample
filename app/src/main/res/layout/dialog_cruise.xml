@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="380dp"
+    android:layout_height="wrap_content"
+    android:background="#EE333333"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- 标题行 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="巡航模式"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnCruiseClose"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:backgroundTint="#555555"
+            android:padding="0dp"
+            android:text="✕"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:background="#555555" />
+
+    <!-- 服务器地址 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="服务器:"
+            android:textColor="#AADDDDDD"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/etCruiseServer"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="#DD555555"
+            android:hint="127.0.0.1:21234"
+            android:text="127.0.0.1:21234"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#88FFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- 云台俯仰角 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="云台角度:"
+            android:textColor="#AADDDDDD"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/etCruiseGimbalPitch"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="#DD555555"
+            android:hint="-45.0"
+            android:text="-45.0"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#88FFFFFF"
+            android:textSize="13sp"
+            android:inputType="numberDecimal|numberSigned" />
+
+        <Button
+            android:id="@+id/btnCruiseSetGimbalPitch"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#1976D2"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="应用"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 航线选择 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="选择航线:"
+            android:textColor="#AADDDDDD"
+            android:textSize="14sp" />
+
+        <Spinner
+            android:id="@+id/spCruiseWp"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:background="#DD555555" />
+
+        <Button
+            android:id="@+id/btnCruiseRefreshWp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#555555"
+            android:padding="0dp"
+            android:text="↻"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnCruiseSelectWp"
+            android:layout_width="wrap_content"
+            android:layout_height="36dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#1976D2"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="选择航线"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnCruiseStart"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="16dp"
+        android:backgroundTint="#4CAF50"
+        android:enabled="true"
+        android:text="开始巡航"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvCruiseStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center"
+        android:text="● 就绪"
+        android:textColor="#AAAAAA"
+        android:textSize="13sp" />
+
+</LinearLayout>
