@@ -13,13 +13,13 @@
     <LinearLayout
         android:id="@+id/topBarLayout"
         android:layout_width="match_parent"
-        android:layout_height="40dp"
+        android:layout_height="42dp"
         android:layout_alignParentTop="true"
-        android:background="#BB000000"
+        android:background="#D91A1A1E"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp">
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp">
 
         <dji.v5.ux.core.widget.systemstatus.SystemStatusWidget
             android:id="@+id/systemStatusWidget"
@@ -58,25 +58,195 @@
             android:layout_marginStart="8dp" />
     </LinearLayout>
 
-<!-- ★ 模式切换按钮条 -->
+    <LinearLayout
+        android:id="@+id/hudLayout"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/topBarLayout"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="10dp"
+        android:background="#CC1A1A1E"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingTop="9dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="9dp">
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="X:" android:textColor="#B3FFFFFF" android:textSize="12sp" />
+        <TextView android:id="@+id/xSpeedText" android:layout_width="68dp"
+            android:layout_height="wrap_content" android:fontFamily="monospace"
+            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="10dp" android:text="Y:" android:textColor="#B3FFFFFF" android:textSize="12sp" />
+        <TextView android:id="@+id/ySpeedText" android:layout_width="68dp"
+            android:layout_height="wrap_content" android:fontFamily="monospace"
+            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="10dp" android:text="Z:" android:textColor="#B3FFFFFF" android:textSize="12sp" />
+        <TextView android:id="@+id/zSpeedText" android:layout_width="68dp"
+            android:layout_height="wrap_content" android:fontFamily="monospace"
+            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="12dp" android:text="Yaw:" android:textColor="#B3FFFFFF" android:textSize="12sp" />
+        <TextView android:id="@+id/yawRateText" android:layout_width="60dp"
+            android:layout_height="wrap_content" android:fontFamily="monospace"
+            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="12dp" android:text="剩余:" android:textColor="#B3FFFFFF" android:textSize="12sp" />
+        <TextView android:id="@+id/remainingTimeText" android:layout_width="56dp"
+            android:layout_height="wrap_content" android:fontFamily="monospace"
+            android:gravity="end" android:text="--:--" android:textColor="#FFFFFF" android:textSize="13sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/transferDebugText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/hudLayout"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="8dp"
+        android:background="#CC1A1A1E"
+        android:paddingStart="12dp"
+        android:paddingTop="9dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="9dp"
+        android:text="传输调试信息"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/velocityControlLayout"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentStart="true"
+        android:layout_alignParentBottom="true"
+        android:layout_marginStart="8dp"
+        android:layout_marginBottom="8dp"
+        android:background="#CC1A1A1E"
+        android:orientation="vertical"
+        android:padding="8dp"
+        android:visibility="visible">
+
+        <TextView
+            android:id="@+id/txtVelTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="速度控制"
+            android:textColor="#B3FFFFFF"
+            android:textSize="12sp"
+            android:paddingBottom="5dp" />
+
+        <Button
+            android:id="@+id/btnVelStartStop"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="启动"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnVelZero"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="速度归零"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="5dp"
+            android:background="#1AFFFFFF" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btnVelYawMinus" android:layout_width="44dp" android:layout_height="44dp"
+                android:backgroundTint="#9B51E0" android:padding="0dp" android:text="Yaw-"
+                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+            <Button android:id="@+id/btnVelYawPlus" android:layout_width="44dp" android:layout_height="44dp"
+                android:layout_marginStart="5dp" android:backgroundTint="#9B51E0" android:padding="0dp"
+                android:text="Yaw+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btnVelXMinus" android:layout_width="44dp" android:layout_height="44dp"
+                android:backgroundTint="#2F80ED" android:padding="0dp" android:text="X-"
+                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+            <Button android:id="@+id/btnVelXPlus" android:layout_width="44dp" android:layout_height="44dp"
+                android:layout_marginStart="5dp" android:backgroundTint="#2F80ED" android:padding="0dp"
+                android:text="X+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btnVelYMinus" android:layout_width="44dp" android:layout_height="44dp"
+                android:backgroundTint="#27AE60" android:padding="0dp" android:text="Y-"
+                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+            <Button android:id="@+id/btnVelYPlus" android:layout_width="44dp" android:layout_height="44dp"
+                android:layout_marginStart="5dp" android:backgroundTint="#27AE60" android:padding="0dp"
+                android:text="Y+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:orientation="horizontal">
+            <Button android:id="@+id/btnVelZMinus" android:layout_width="44dp" android:layout_height="44dp"
+                android:backgroundTint="#F2994A" android:padding="0dp" android:text="Z-"
+                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+            <Button android:id="@+id/btnVelZPlus" android:layout_width="44dp" android:layout_height="44dp"
+                android:layout_marginStart="5dp" android:backgroundTint="#F2994A" android:padding="0dp"
+                android:text="Z+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/txtVelStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:gravity="center"
+            android:text="等待N挡..."
+            android:textColor="#80FFFFFF"
+            android:textSize="9sp" />
+    </LinearLayout>
+
     <LinearLayout
         android:id="@+id/modeSelectorLayout"
-        android:layout_width="match_parent"
-        android:layout_height="36dp"
-        android:layout_below="@id/topBarLayout"
-        android:background="#CC000000"
-        android:gravity="center"
-        android:orientation="horizontal"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp">
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_toEndOf="@id/velocityControlLayout"
+        android:layout_alignBottom="@id/velocityControlLayout"
+        android:layout_marginStart="6dp"
+        android:background="#CC1A1A1E"
+        android:orientation="vertical"
+        android:padding="6dp">
 
         <Button
             android:id="@+id/btnModeMapping"
-            android:layout_width="0dp"
-            android:layout_height="28dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="4dp"
-            android:backgroundTint="#455A64"
+            android:layout_width="90dp"
+            android:layout_height="32dp"
+            android:backgroundTint="#4F5560"
             android:padding="0dp"
             android:text="建图模式"
             android:textColor="#FFFFFF"
@@ -84,11 +254,10 @@
 
         <Button
             android:id="@+id/btnModeCollect"
-            android:layout_width="0dp"
-            android:layout_height="28dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="4dp"
-            android:backgroundTint="#455A64"
+            android:layout_width="90dp"
+            android:layout_height="32dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
             android:padding="0dp"
             android:text="采点模式"
             android:textColor="#FFFFFF"
@@ -96,112 +265,152 @@
 
         <Button
             android:id="@+id/btnModeCruise"
-            android:layout_width="0dp"
-            android:layout_height="28dp"
-            android:layout_weight="1"
-            android:backgroundTint="#455A64"
+            android:layout_width="90dp"
+            android:layout_height="32dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
             android:padding="0dp"
             android:text="巡航模式"
             android:textColor="#FFFFFF"
             android:textSize="12sp" />
     </LinearLayout>
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <!-- 底部居中 HUD 信息栏 (水平排列)                          -->
-    <!-- ═══════════════════════════════════════════════════════ -->
+
     <LinearLayout
-        android:id="@+id/hudLayout"
+        android:id="@+id/waypointControlLayout"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_alignParentEnd="true"
         android:layout_alignParentBottom="true"
-        android:layout_centerHorizontal="true"
+        android:layout_marginEnd="8dp"
         android:layout_marginBottom="8dp"
-        android:background="#CC000000"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="14dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="14dp"
-        android:paddingBottom="8dp">
+        android:background="#CC1A1A1E"
+        android:orientation="vertical"
+        android:padding="6dp">
 
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="X:" android:textColor="#AAFFFFFF" android:textSize="12sp" />
-        <TextView android:id="@+id/xSpeedText" android:layout_width="68dp"
-            android:layout_height="wrap_content" android:fontFamily="monospace"
-            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_marginStart="8dp" android:text="Y:" android:textColor="#AAFFFFFF" android:textSize="12sp" />
-        <TextView android:id="@+id/ySpeedText" android:layout_width="68dp"
-            android:layout_height="wrap_content" android:fontFamily="monospace"
-            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_marginStart="8dp" android:text="Z:" android:textColor="#AAFFFFFF" android:textSize="12sp" />
-        <TextView android:id="@+id/zSpeedText" android:layout_width="68dp"
-            android:layout_height="wrap_content" android:fontFamily="monospace"
-            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_marginStart="10dp" android:text="Yaw:" android:textColor="#AAFFFFFF" android:textSize="12sp" />
-        <TextView android:id="@+id/yawRateText" android:layout_width="60dp"
-            android:layout_height="wrap_content" android:fontFamily="monospace"
-            android:gravity="end" android:text="--" android:textColor="#FFFFFF" android:textSize="13sp" />
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:layout_marginStart="10dp" android:text="剩余:" android:textColor="#AAFFFFFF" android:textSize="12sp" />
-        <TextView android:id="@+id/remainingTimeText" android:layout_width="56dp"
-            android:layout_height="wrap_content" android:fontFamily="monospace"
-            android:gravity="end" android:text="--:--" android:textColor="#FFFFFF" android:textSize="13sp" />
+        <Button
+            android:id="@+id/btnRecordWaypoint"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="记录航点"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnSaveWaypoints"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="保存航线"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <Button
+            android:id="@+id/btnClearWaypoints"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="清除航点"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
     </LinearLayout>
 
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <!-- 直播按钮 (右上角，镜头控制左边)                         -->
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <TextView
-        android:id="@+id/transferDebugText"
-        android:layout_width="match_parent"
+    <LinearLayout
+        android:id="@+id/preflightControlLayout"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_above="@id/hudLayout"
-        android:layout_marginStart="8dp"
-        android:layout_marginEnd="8dp"
-        android:layout_marginBottom="8dp"
-        android:background="#CC102027"
-        android:paddingStart="10dp"
-        android:paddingTop="8dp"
-        android:paddingEnd="10dp"
-        android:paddingBottom="8dp"
-        android:text="传输调试信息"
-        android:textColor="#FFFFFF"
-        android:textSize="12sp"
-        android:visibility="gone" />
+        android:layout_toStartOf="@id/waypointControlLayout"
+        android:layout_alignBottom="@id/waypointControlLayout"
+        android:layout_marginEnd="6dp"
+        android:background="#CC1A1A1E"
+        android:orientation="vertical"
+        android:padding="6dp">
 
-    <Button
-        android:id="@+id/btnLiveStreamPanel"
-        android:layout_width="56dp"
-        android:layout_height="40dp"
-        android:layout_alignParentTop="true"
-        android:layout_marginTop="60dp"
-        android:layout_toStartOf="@id/lensControlLayout"
+        <Button
+            android:id="@+id/btnTakeoff"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:backgroundTint="#2F80ED"
+            android:padding="0dp"
+            android:text="起飞前检查"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnAutoLanding"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#EB5757"
+            android:padding="0dp"
+            android:text="视觉降落"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnLiveStreamPanel"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="直播"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/photoControlLayout"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_above="@id/waypointControlLayout"
+        android:layout_alignParentEnd="true"
         android:layout_marginEnd="8dp"
-        android:backgroundTint="#455A64"
-        android:padding="0dp"
-        android:text="直播"
-        android:textColor="#FFFFFF"
-        android:textSize="11sp" />
+        android:layout_marginBottom="10dp"
+        android:orientation="vertical"
+        android:gravity="center_horizontal">
+
+        <dji.v5.ux.cameracore.widget.cameracontrols.photovideoswitch.PhotoVideoSwitchWidget
+            android:id="@+id/photoVideoSwitchWidget"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginBottom="10dp" />
+
+        <dji.v5.ux.cameracore.widget.cameracapture.recordvideo.RecordVideoWidget
+            android:id="@+id/recordVideoWidget"
+            android:layout_width="50dp"
+            android:layout_height="50dp"
+            android:layout_marginBottom="10dp" />
+
+        <dji.v5.ux.cameracore.widget.cameracapture.shootphoto.ShootPhotoWidget
+            android:id="@+id/shootPhotoWidget"
+            android:layout_width="50dp"
+            android:layout_height="50dp" />
+    </LinearLayout>
 
     <LinearLayout
         android:id="@+id/lensControlLayout"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentTop="true"
-        android:layout_alignParentEnd="true"
-        android:layout_marginTop="60dp"
-        android:layout_marginEnd="16dp"
-        android:background="#AA000000"
+        android:layout_toStartOf="@id/photoControlLayout"
+        android:layout_alignBottom="@id/photoControlLayout"
+        android:layout_marginEnd="6dp"
+        android:background="#CC1A1A1E"
         android:orientation="vertical"
-        android:padding="4dp">
+        android:padding="6dp">
 
         <Button
             android:id="@+id/btnLensWide"
-            android:layout_width="56dp"
+            android:layout_width="58dp"
             android:layout_height="40dp"
-            android:backgroundTint="#555555"
+            android:backgroundTint="#2F80ED"
             android:padding="0dp"
             android:text="广角"
             android:textColor="#FFFFFF"
@@ -209,10 +418,10 @@
 
         <Button
             android:id="@+id/btnLensZoom"
-            android:layout_width="56dp"
+            android:layout_width="58dp"
             android:layout_height="40dp"
-            android:layout_marginTop="4dp"
-            android:backgroundTint="#555555"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
             android:padding="0dp"
             android:text="变焦"
             android:textColor="#FFFFFF"
@@ -220,24 +429,33 @@
 
         <Button
             android:id="@+id/btnLensThermal"
-            android:layout_width="56dp"
+            android:layout_width="58dp"
             android:layout_height="40dp"
-            android:layout_marginTop="4dp"
-            android:backgroundTint="#555555"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#4F5560"
             android:padding="0dp"
             android:text="红外"
             android:textColor="#FFFFFF"
             android:textSize="11sp" />
     </LinearLayout>
 
+    <dji.v5.ux.visualcamera.zoom.FocalZoomWidget
+        android:id="@+id/focalZoomWidget"
+        android:layout_width="40dp"
+        android:layout_height="200dp"
+        android:layout_centerVertical="true"
+        android:layout_marginEnd="24dp"
+        android:layout_toStartOf="@id/lensControlLayout"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/liveStreamLayout"
-        android:layout_width="280dp"
+        android:layout_width="290dp"
         android:layout_height="wrap_content"
         android:layout_centerInParent="true"
-        android:background="#AA000000"
+        android:background="#CC1A1A1E"
         android:orientation="vertical"
-        android:padding="10dp"
+        android:padding="14dp"
         android:visibility="gone">
 
         <TextView
@@ -252,9 +470,9 @@
             android:id="@+id/liveStreamAddressLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="10dp"
             android:text="RTMP 地址"
-            android:textColor="#AAFFFFFF"
+            android:textColor="#B3FFFFFF"
             android:textSize="11sp" />
 
         <TextView
@@ -271,24 +489,26 @@
             android:id="@+id/liveStreamAddressInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="10dp"
             android:background="#1AFFFFFF"
             android:fontFamily="monospace"
             android:hint="rtmp://192.168.1.20:1935/live/obs1"
             android:imeOptions="actionDone"
             android:inputType="textUri"
-            android:padding="8dp"
+            android:padding="10dp"
             android:singleLine="true"
             android:textColor="#FFFFFF"
-            android:textColorHint="#88FFFFFF"
+            android:textColorHint="#80FFFFFF"
             android:textSize="11sp" />
 
         <Button
             android:id="@+id/btnLiveStreamSave"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:backgroundTint="#1565C0"
+            android:layout_marginTop="10dp"
+            android:backgroundTint="#2F80ED"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
             android:text="保存推流地址"
             android:textColor="#FFFFFF"
             android:textSize="13sp"
@@ -298,9 +518,9 @@
             android:id="@+id/liveStreamStatusLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="10dp"
             android:text="状态"
-            android:textColor="#AAFFFFFF"
+            android:textColor="#B3FFFFFF"
             android:textSize="11sp" />
 
         <TextView
@@ -316,253 +536,14 @@
             android:id="@+id/btnLiveStreamAction"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:backgroundTint="#2E7D32"
+            android:layout_marginTop="12dp"
+            android:backgroundTint="#2ECC71"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
             android:text="开始 RTMP 推流"
             android:textColor="#FFFFFF"
             android:textSize="14sp"
             android:textStyle="bold" />
     </LinearLayout>
-
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <!-- 右侧中部：起飞检查/视觉降落 + 航点控制 (水平并排)       -->
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <LinearLayout
-        android:id="@+id/rightControlContainer"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/lensControlLayout"
-        android:layout_alignParentEnd="true"
-        android:layout_marginTop="8dp"
-        android:layout_marginEnd="60dp"
-        android:orientation="horizontal">
-
-        <!-- 起飞前检查 + 视觉降落 (竖排，在航点左边) -->
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="#AA000000"
-            android:orientation="vertical"
-            android:padding="4dp">
-
-            <Button
-                android:id="@+id/btnTakeoff"
-                android:layout_width="72dp"
-                android:layout_height="40dp"
-                android:backgroundTint="#1976D2"
-                android:padding="0dp"
-                android:text="起飞前检查"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-
-            <Button
-                android:id="@+id/btnAutoLanding"
-                android:layout_width="72dp"
-                android:layout_height="40dp"
-                android:layout_marginTop="4dp"
-                android:backgroundTint="#D32F2F"
-                android:padding="0dp"
-                android:text="视觉降落"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-
-        <!-- 航点控制 (竖排) -->
-        <LinearLayout
-            android:id="@+id/waypointControlLayout"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:background="#AA000000"
-            android:orientation="vertical"
-            android:padding="4dp">
-
-            <Button
-                android:id="@+id/btnRecordWaypoint"
-                android:layout_width="72dp"
-                android:layout_height="40dp"
-                android:backgroundTint="#555555"
-                android:padding="0dp"
-                android:text="记录航点"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp" />
-
-            <Button
-                android:id="@+id/btnSaveWaypoints"
-                android:layout_width="72dp"
-                android:layout_height="40dp"
-                android:layout_marginTop="4dp"
-                android:backgroundTint="#555555"
-                android:padding="0dp"
-                android:text="保存航线"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp" />
-
-            <Button
-                android:id="@+id/btnClearWaypoints"
-                android:layout_width="72dp"
-                android:layout_height="40dp"
-                android:layout_marginTop="4dp"
-                android:backgroundTint="#555555"
-                android:padding="0dp"
-                android:text="清除航点"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <!-- 速度控制面板 — 左下角，HUD 上方                          -->
-    <!-- ═══════════════════════════════════════════════════════ -->
-    <LinearLayout
-        android:id="@+id/velocityControlLayout"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_above="@id/hudLayout"
-        android:layout_alignParentStart="true"
-        android:layout_marginStart="8dp"
-        android:layout_marginBottom="8dp"
-        android:background="#AA000000"
-        android:orientation="vertical"
-        android:padding="5dp"
-        android:visibility="visible">
-
-        <TextView
-            android:id="@+id/txtVelTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:text="速度控制"
-            android:textColor="#CCFFFFFF"
-            android:textSize="12sp"
-            android:paddingBottom="3dp" />
-
-        <Button
-            android:id="@+id/btnVelStartStop"
-            android:layout_width="match_parent"
-            android:layout_height="38dp"
-            android:backgroundTint="#555555"
-            android:padding="0dp"
-            android:text="启动"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp" />
-
-        <Button
-            android:id="@+id/btnVelZero"
-            android:layout_width="match_parent"
-            android:layout_height="38dp"
-            android:layout_marginTop="2dp"
-            android:backgroundTint="#555555"
-            android:padding="0dp"
-            android:text="速度归零"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="3dp"
-            android:background="#44FFFFFF" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-            <Button android:id="@+id/btnVelYawMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#9C27B0" android:padding="0dp" android:text="Yaw-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelYawPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="3dp" android:backgroundTint="#9C27B0" android:padding="0dp"
-                android:text="Yaw+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:orientation="horizontal">
-            <Button android:id="@+id/btnVelXMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#1976D2" android:padding="0dp" android:text="X-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelXPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="3dp" android:backgroundTint="#1976D2" android:padding="0dp"
-                android:text="X+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:orientation="horizontal">
-            <Button android:id="@+id/btnVelYMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#388E3C" android:padding="0dp" android:text="Y-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelYPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="3dp" android:backgroundTint="#388E3C" android:padding="0dp"
-                android:text="Y+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:orientation="horizontal">
-            <Button android:id="@+id/btnVelZMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#F57C00" android:padding="0dp" android:text="Z-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelZPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="3dp" android:backgroundTint="#F57C00" android:padding="0dp"
-                android:text="Z+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/txtVelStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="3dp"
-            android:gravity="center"
-            android:text="等待N挡..."
-            android:textColor="#88FFFFFF"
-            android:textSize="9sp" />
-    </LinearLayout>
-
-    <dji.v5.ux.visualcamera.zoom.FocalZoomWidget
-        android:id="@+id/focalZoomWidget"
-        android:layout_width="40dp"
-        android:layout_height="200dp"
-        android:layout_centerVertical="true"
-        android:layout_marginEnd="24dp"
-        android:layout_toStartOf="@id/lensControlLayout"
-        android:visibility="gone" />
-
-    <dji.v5.ux.cameracore.widget.cameracapture.shootphoto.ShootPhotoWidget
-        android:id="@+id/shootPhotoWidget"
-        android:layout_width="50dp"
-        android:layout_height="50dp"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentBottom="true"
-        android:layout_marginEnd="16dp"
-        android:layout_marginBottom="24dp" />
-
-    <dji.v5.ux.cameracore.widget.cameracapture.recordvideo.RecordVideoWidget
-        android:id="@+id/recordVideoWidget"
-        android:layout_width="50dp"
-        android:layout_height="50dp"
-        android:layout_above="@id/shootPhotoWidget"
-        android:layout_alignParentEnd="true"
-        android:layout_marginEnd="16dp"
-        android:layout_marginBottom="16dp" />
-
-    <dji.v5.ux.cameracore.widget.cameracontrols.photovideoswitch.PhotoVideoSwitchWidget
-        android:id="@+id/photoVideoSwitchWidget"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:layout_above="@id/recordVideoWidget"
-        android:layout_alignParentEnd="true"
-        android:layout_marginEnd="21dp"
-        android:layout_marginBottom="16dp" />
 
 </RelativeLayout>
