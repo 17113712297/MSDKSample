@@ -57,6 +57,7 @@ class LandingController {
     var onSpeedUpdate: ((velX: Double, velY: Double, velZ: Double) -> Unit)? = null
     var onYawRateUpdate: ((yawRate: Double) -> Unit)? = null
     var onBatteryUpdate: ((pct: Int) -> Unit)? = null
+    var onLandingSucceed: (() -> Unit)? = null
 
     var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 
@@ -327,6 +328,7 @@ class LandingController {
                         runCatching { KeyManager.getInstance().performAction(KeyTools.createKey(FlightControllerKey.KeyStartAutoLanding), null) }
                         controlHandler.postDelayed({
                             runCatching { KeyManager.getInstance().performAction(KeyTools.createKey(FlightControllerKey.KeyConfirmLanding), null) }
+                            onLandingSucceed?.invoke()
                             stopMission(if (wasFlying) "自动盲降完成" else "强制停桨完成")
                         }, 1000)
                     }, 800)

@@ -327,6 +327,11 @@ class DroneControlService : Service() {
                     onResetVisionTracking?.invoke()
                     onStartCameraStream?.invoke()
 
+                    // 注册降落成功回调：视觉降落完成后给 Jetson 发 CMD_ACK_LAND_COMPLETE
+                    ctrl.onLandingSucceed = {
+                        sendNotification(DroneCommProtocol.CMD_ACK_LAND_COMPLETE)
+                    }
+
                     mainHandler.post { ctrl.startVisionLanding() }
                     sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_OK)
                 } else {
