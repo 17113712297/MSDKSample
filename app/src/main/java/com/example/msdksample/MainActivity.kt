@@ -219,7 +219,20 @@ private lateinit var landingController: LandingController
             setupControllerCallbacks()
             DroneControlService.preflightController = preflightController
             DroneControlService.landingController = landingController
-
+            // ★ 注入相机流启停闭包（供 DroneControlService 在 PSDK 触发时调用）
+            DroneControlService.onStartCameraStream = {
+                runOnUiThread {
+                    ensureVisionSystemReady()
+                    visionController?.resetTracking()
+                    testCameraController?.startVideoStream()
+                }
+            }
+            DroneControlService.onResetVisionTracking = {
+                visionController?.resetTracking()
+            }
+            DroneControlService.onStopCameraStream = {
+                runCatching { testCameraController?.stopVideoStream() }
+            }
             // ★ 初始化模式控制器
             modeController = ModeController()
             DroneControlService.modeController = modeController
