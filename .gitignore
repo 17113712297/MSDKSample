@@ -6,9 +6,9 @@
 /app/build/
 /opencv/.cxx/
 /opencv/build/
-/opencv
 /.gradle/
-/.idea/
+/.idea/workspace.xml
+/.idea/.name
 /.kotlin/
 /.tmp_dji/
 /local.properties
