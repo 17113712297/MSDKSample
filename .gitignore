@@ -1,6 +1,6 @@
 # Project exclude paths
 /android-sdk-v5-uxsdk/build/
 /app/build/
-
+/opencv
 # Claude Code local config
 CLAUDE.md
