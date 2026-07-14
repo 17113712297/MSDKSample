@@ -1,1 +1,0 @@
-D:\MSDK Sample\opencv\libcxx_helper\CMakeLists.txt

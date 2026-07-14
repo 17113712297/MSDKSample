@@ -1,7 +1,0 @@
-[
-{
-  "directory": "D:/MSDK Sample/opencv/.cxx/Debug/1s2h1u5w/x86",
-  "command": "C:\\Users\\cj-la\\AppData\\Local\\Android\\Sdk\\ndk\\27.0.12077973\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\clang++.exe --target=i686-none-linux-android21 --sysroot=C:/Users/cj-la/AppData/Local/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -mstackrealign -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security   -fno-limit-debug-info  -fPIC -o CMakeFiles\\opencv_jni_shared.dir\\dummy.cpp.o -c \"D:\\MSDK Sample\\opencv\\libcxx_helper\\dummy.cpp\"",
-  "file": "D:\\MSDK Sample\\opencv\\libcxx_helper\\dummy.cpp"
-}
-]
