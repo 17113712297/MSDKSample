@@ -289,6 +289,7 @@ private lateinit var landingController: LandingController
         runCatching {
             ContextCompat.startForegroundService(this, Intent(this, DroneControlService::class.java))
         }
+        VideoUploadCommandService.start(this)
     }
 
     override fun onResume() {

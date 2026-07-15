@@ -32,6 +32,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.charset.StandardCharsets
 import java.net.URLEncoder
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.GregorianCalendar
@@ -61,7 +63,7 @@ class VideoTransferManager(
         private const val DISABLE_TIMEOUT_MS = 5_000L
         private const val PULL_TIMEOUT_MS = 15_000L
         private const val DOWNLOAD_TIMEOUT_MS = 10 * 60_000L
-        private const val RECORD_SETTLE_MS = 30_000L
+        private const val RECORD_SETTLE_MS = 45_000L
         private const val TRANSFER_GATE_POLL_MS = 1_000L
         private const val STATUS_PROGRESS_STEP_PERCENT = 5L
         private const val STATUS_PROGRESS_INTERVAL_MS = 1_000L
@@ -71,6 +73,11 @@ class VideoTransferManager(
         private const val MEDIA_LOG_LIMIT = 12
         private const val VIDEO_DIR = "videos"
         private const val PUBLIC_VIDEO_SUBDIR = "MSDKSample"
+
+        private val sharedPendingTransfer = AtomicReference<VideoUploadCommand?>()
+        private val sharedRecordStopSequence = AtomicLong(0L)
+        @Volatile private var sharedLastRecordStopEventTimeMs = 0L
+        @Volatile private var sharedAwaitingCommandAfterStop = false
     }
 
     private val appContext = context.applicationContext
@@ -82,31 +89,46 @@ class VideoTransferManager(
         Thread(runnable, "video-transfer-scheduler").apply { isDaemon = true }
     }
     private val workerRunning = AtomicBoolean(false)
-    private val pendingTransfer = AtomicBoolean(false)
-    private val recordStopSequence = AtomicLong(0L)
     private val countdownFutureRef = AtomicReference<ScheduledFuture<*>?>(null)
-    @Volatile private var lastRecordStopEventTimeMs = 0L
     var statusCallback: ((String) -> Unit)? = null
 
-    fun enqueueLatestVideoTransfer() {
-        pendingTransfer.set(true)
+    fun enqueueLatestVideoTransfer(command: VideoUploadCommand) {
+        sharedPendingTransfer.set(command)
+        emitStatus("已收到 1.1 上传指令，等待录像结束后再拉取 SD 卡视频")
         emitStatus("视频传输已排队，等待安全拉取窗口")
-        if (workerRunning.compareAndSet(false, true)) {
-            executor.execute { drainPendingTransfers() }
-        } else {
-            Log.i(TAG, "Coalesced latest-video transfer request while another transfer is running")
+        Log.i(
+            TAG,
+            "Stored latest 1.1 command: siteId=${command.siteId}, deviceId=${command.deviceId}, detectTimeCur=${command.detectTimeCur}"
+        )
+
+        val stopTimeMs = sharedLastRecordStopEventTimeMs
+        if (sharedAwaitingCommandAfterStop && stopTimeMs > 0L && !isCameraRecording()) {
+            sharedAwaitingCommandAfterStop = false
+            enqueueLatestVideoTransferAfterRecordStop()
         }
     }
 
     fun enqueueLatestVideoTransferAfterRecordStop() {
         val stopTimeMs = System.currentTimeMillis()
-        lastRecordStopEventTimeMs = stopTimeMs
-        val sequence = recordStopSequence.incrementAndGet()
+        sharedLastRecordStopEventTimeMs = stopTimeMs
+        val sequence = sharedRecordStopSequence.incrementAndGet()
+        if (sharedPendingTransfer.get() == null) {
+            sharedAwaitingCommandAfterStop = true
+            cancelPendingCountdown()
+            emitStatus("录像已结束，等待 1.1 上传指令；未收到完整字段不会倒计时或拉取 SD 卡视频")
+            Log.i(TAG, "Record stopped without a pending 1.1 video upload command")
+            return
+        }
+
+        sharedAwaitingCommandAfterStop = false
         cancelPendingCountdown()
-        emitStatus("检测到录制结束，30 秒后开始拉取 SD 卡视频")
-        Log.i(TAG, "Record stop detected, schedule transfer after 30s. seq=$sequence stopTimeMs=$stopTimeMs")
+        emitStatus("检测到录制结束，45 秒后开始拉取 SD 卡视频")
+        Log.i(TAG, "Record stop detected, schedule transfer after 45s. seq=$sequence stopTimeMs=$stopTimeMs")
         val countdownFuture = scheduler.scheduleAtFixedRate({
-            if (recordStopSequence.get() != sequence) {
+            if (sharedRecordStopSequence.get() != sequence) {
+                return@scheduleAtFixedRate
+            }
+            if (sharedPendingTransfer.get() == null) {
                 return@scheduleAtFixedRate
             }
             val elapsedMs = System.currentTimeMillis() - stopTimeMs
@@ -118,19 +140,18 @@ class VideoTransferManager(
         }, 0L, 1L, TimeUnit.SECONDS)
         countdownFutureRef.set(countdownFuture)
         scheduler.schedule({
-            if (recordStopSequence.get() != sequence) {
-                Log.i(TAG, "Skip outdated scheduled transfer. seq=$sequence latest=${recordStopSequence.get()}")
+            if (sharedRecordStopSequence.get() != sequence) {
+                Log.i(TAG, "Skip outdated scheduled transfer. seq=$sequence latest=${sharedRecordStopSequence.get()}")
                 return@schedule
             }
 
             cancelPendingCountdown()
-            pendingTransfer.set(true)
-            emitStatus("录制结束已满 30 秒，准备拉取 SD 卡视频")
-            if (workerRunning.compareAndSet(false, true)) {
-                executor.execute { drainPendingTransfers() }
-            } else {
-                Log.i(TAG, "Coalesced scheduled post-record-stop transfer while another transfer is running")
+            if (sharedPendingTransfer.get() == null) {
+                sharedAwaitingCommandAfterStop = true
+                return@schedule
             }
+            emitStatus("录制结束已满 45 秒，准备拉取 SD 卡视频")
+            startPendingTransferWorker()
         }, RECORD_SETTLE_MS, TimeUnit.MILLISECONDS)
     }
 
@@ -140,29 +161,38 @@ class VideoTransferManager(
         executor.shutdownNow()
     }
 
-    private fun drainPendingTransfers() {
-        try {
-            while (pendingTransfer.getAndSet(false)) {
-                runTransferSafely()
-            }
-        } finally {
+    private fun startPendingTransferWorker() {
+        if (!workerRunning.compareAndSet(false, true)) {
+            Log.i(TAG, "Skip starting video transfer because another transfer is running")
+            emitStatus("已有视频传输任务正在执行，最新 1.1 指令已保留")
+            return
+        }
+
+        val command = sharedPendingTransfer.getAndSet(null)
+        if (command == null) {
             workerRunning.set(false)
-            if (pendingTransfer.get() && workerRunning.compareAndSet(false, true)) {
-                executor.execute { drainPendingTransfers() }
+            return
+        }
+
+        executor.execute {
+            try {
+                runTransferSafely(command)
+            } finally {
+                workerRunning.set(false)
             }
         }
     }
 
-    private fun runTransferSafely() {
+    private fun runTransferSafely(command: VideoUploadCommand) {
         runCatching {
-            transferLatestVideo()
+            transferLatestVideo(command)
         }.onFailure { error ->
             Log.w(TAG, "Latest video transfer failed: ${error.message}", error)
             emitStatus("视频传输失败: ${error.message ?: "未知异常"}")
         }
     }
 
-    private fun transferLatestVideo() {
+    private fun transferLatestVideo(command: VideoUploadCommand) {
         val streamAddress = streamAddressProvider.invoke().trim()
         val host = StreamAddressResolver.extractHost(streamAddress)
         if (host.isNullOrBlank()) {
@@ -173,7 +203,7 @@ class VideoTransferManager(
 
         emitStatus("等待安全拉取窗口: host=$host:$UPLOAD_PORT")
         waitForSafeTransferWindow()
-        lastRecordStopEventTimeMs = 0L
+        sharedLastRecordStopEventTimeMs = 0L
 
         val mediaManager = MediaDataCenter.getInstance().mediaManager
         emitStatus("开始接管媒体管理器，准备读取无人机 SD 卡")
@@ -188,7 +218,8 @@ class VideoTransferManager(
             }
 
             val mediaId = buildMediaId(mediaFile)
-            if (mediaId == lastUploadedMediaId()) {
+            val uploadId = "$mediaId|${command.detectTimeCur}"
+            if (uploadId == lastUploadedMediaId()) {
                 Log.i(TAG, "Skip upload because latest video was already uploaded: $mediaId")
                 emitStatus("最新视频已上传过，跳过重复传输")
                 return
@@ -196,11 +227,12 @@ class VideoTransferManager(
 
             emitStatus("开始从无人机 SD 卡拉取: ${mediaFile.getFileName()}")
             val localFile = downloadMediaFile(mediaFile)
-            val uploadFileName = buildUploadFileName(mediaFile.getFileName())
+            val uploadFileName = buildUploadFileName(command)
             val exportedToPublicDir = exportVideoToPublicDirectory(localFile, uploadFileName)
             emitStatus("开始上传到前端: $uploadFileName")
             uploadVideoFile(host, localFile, uploadFileName)
-            markUploaded(mediaId)
+            notifyVideoUploadCompleted(host, command)
+            markUploaded(uploadId)
             if (exportedToPublicDir) {
                 deleteLocalWorkingFile(localFile)
             } else {
@@ -215,6 +247,7 @@ class VideoTransferManager(
 
     private fun waitForSafeTransferWindow() {
         var lastLogTimeMs = 0L
+        var observedRecordStopTimeMs = 0L
 
         while (true) {
             if (Thread.currentThread().isInterrupted) {
@@ -228,16 +261,23 @@ class VideoTransferManager(
                 ) ?: false
             }.getOrDefault(true)
 
-            val timeSinceRecordStopMs = if (lastRecordStopEventTimeMs > 0L) {
-                now - lastRecordStopEventTimeMs
-            } else {
-                0L
+            val recordStopTimeMs = when {
+                isRecording -> {
+                    observedRecordStopTimeMs = 0L
+                    0L
+                }
+                sharedLastRecordStopEventTimeMs > 0L -> sharedLastRecordStopEventTimeMs
+                else -> {
+                    if (observedRecordStopTimeMs == 0L) {
+                        observedRecordStopTimeMs = now
+                    }
+                    observedRecordStopTimeMs
+                }
             }
-
-            val hasRecentRecordStopEvent = lastRecordStopEventTimeMs > 0L
+            val timeSinceRecordStopMs = (now - recordStopTimeMs).coerceAtLeast(0L)
+            val hasRecentRecordStopEvent = recordStopTimeMs > 0L
             val canTransferAfterRecordStop =
                 !isRecording &&
-                    hasRecentRecordStopEvent &&
                     timeSinceRecordStopMs >= RECORD_SETTLE_MS
             if (canTransferAfterRecordStop) {
                 val detail = "停录已满 ${timeSinceRecordStopMs / 1000}s，允许开始拉取 SD 卡"
@@ -252,7 +292,7 @@ class VideoTransferManager(
                     isRecording -> "录制中，等待结束录制"
                     hasRecentRecordStopEvent ->
                         "已停录，等待 ${((RECORD_SETTLE_MS - timeSinceRecordStopMs).coerceAtLeast(0L)) / 1000}s"
-                    else -> "等待录制结束事件，收到后 30 秒再拉取 SD 卡"
+                    else -> "等待录制结束事件，收到后 45 秒再拉取 SD 卡"
                 }
                 Log.i(TAG, "Waiting for safe transfer window: $status")
                 emitStatus("安全窗口检查中: $status")
@@ -520,6 +560,14 @@ class VideoTransferManager(
         countdownFutureRef.getAndSet(null)?.cancel(false)
     }
 
+    private fun isCameraRecording(): Boolean {
+        return runCatching {
+            KeyManager.getInstance().getValue(
+                KeyTools.createKey(CameraKey.KeyIsRecording, cameraIndexProvider.invoke())
+            ) ?: false
+        }.getOrDefault(true)
+    }
+
     private fun formatTransferRate(transferredBytes: Long, startTimeMs: Long, nowTimeMs: Long): String {
         val elapsedMs = (nowTimeMs - startTimeMs).coerceAtLeast(1L)
         val bytesPerSecond = transferredBytes * 1000.0 / elapsedMs.toDouble()
@@ -634,9 +682,35 @@ class VideoTransferManager(
         }
     }
 
-    private fun buildUploadFileName(originalFileName: String): String {
-        val timestamp = SimpleDateFormat("yyyyMMddHHmmss", Locale.US).format(Date())
-        return "$timestamp-vcr-$originalFileName"
+    private fun notifyVideoUploadCompleted(host: String, command: VideoUploadCommand) {
+        val query = buildString {
+            append("siteId=").append(command.siteId)
+            append("&deviceId=").append(command.deviceId)
+            append("&airlineKey=").append(URLEncoder.encode(command.airlineKey, StandardCharsets.UTF_8.name()))
+            append("&takeoffState=1")
+            append("&detectTimeCur=").append(URLEncoder.encode(command.detectTimeCur, StandardCharsets.UTF_8.name()))
+        }
+        val connection = (URL("http://$host:$UPLOAD_PORT/sendPicOver?$query").openConnection() as HttpURLConnection)
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.readTimeout = READ_TIMEOUT_MS
+            val statusCode = connection.responseCode
+            val body = (if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader(StandardCharsets.UTF_8)
+                ?.use { it.readText() }
+                .orEmpty()
+            if (statusCode !in 200..299 || !Regex("\\\"resultCode\\\"\\s*:\\s*1").containsMatchIn(body)) {
+                throw IllegalStateException("sendPicOver failed: HTTP $statusCode $body")
+            }
+            Log.i(TAG, "sendPicOver succeeded: $body")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun buildUploadFileName(command: VideoUploadCommand): String {
+        return "${command.detectTimeCur}-vcr-0001.mp4"
     }
 
     private fun isDownloadableMediaFile(mediaFile: MediaFile): Boolean {

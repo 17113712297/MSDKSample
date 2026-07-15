@@ -66,6 +66,10 @@
             android:name=".DroneControlService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <service
+            android:name=".VideoUploadCommandService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
     </application>
 
