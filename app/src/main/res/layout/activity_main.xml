@@ -100,24 +100,6 @@
             android:gravity="end" android:text="--:--" android:textColor="#FFFFFF" android:textSize="13sp" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/transferDebugText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_below="@id/hudLayout"
-        android:layout_marginStart="8dp"
-        android:layout_marginTop="8dp"
-        android:layout_marginEnd="8dp"
-        android:background="#CC1A1A1E"
-        android:paddingStart="12dp"
-        android:paddingTop="9dp"
-        android:paddingEnd="12dp"
-        android:paddingBottom="9dp"
-        android:text="传输调试信息"
-        android:textColor="#FFFFFF"
-        android:textSize="12sp"
-        android:visibility="gone" />
-
     <LinearLayout
         android:id="@+id/velocityControlLayout"
         android:layout_width="wrap_content"

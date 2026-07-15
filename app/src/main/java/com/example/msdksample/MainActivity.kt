@@ -86,7 +86,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var zSpeedText: TextView
     private lateinit var yawRateText: TextView
     private lateinit var remainingTimeText: TextView
-    private lateinit var transferDebugText: TextView
     private lateinit var liveStreamLayout: LinearLayout
     private lateinit var liveStreamAddressText: TextView
     private lateinit var liveStreamStatusText: TextView
@@ -209,9 +208,7 @@ private lateinit var landingController: LandingController
                 streamAddressProvider = { liveStreamController.getConfiguredStreamAddress() },
                 cameraIndexProvider = { currentCameraIndex }
             )
-            videoTransferManager.statusCallback = { status ->
-                runOnUiThread { renderTransferDebugStatus(status) }
-            }
+            // statusCallback 未使用，保持 null
             setupLiveStreamController()
             deviceStatusReportManager.start()
             landingController = LandingController()
@@ -643,7 +640,6 @@ private lateinit var landingController: LandingController
         zSpeedText = findViewById(R.id.zSpeedText)
         yawRateText = findViewById(R.id.yawRateText)
         remainingTimeText = findViewById(R.id.remainingTimeText)
-        transferDebugText = findViewById(R.id.transferDebugText)
         liveStreamLayout = findViewById(R.id.liveStreamLayout)
         liveStreamAddressText = findViewById(R.id.liveStreamAddressText)
         liveStreamStatusText = findViewById(R.id.liveStreamStatusText)
@@ -809,20 +805,7 @@ private lateinit var landingController: LandingController
         yawRateText.text = "0.0"
     }
 
-private fun renderTransferDebugStatus(message: String) {
-        transferDebugText.visibility = View.VISIBLE
-        transferDebugText.text = message
-        val color = when {
-            message.contains("失败") || message.contains("未确认") || message.contains("异常") ->
-                0xFFFFCDD2.toInt()
-            message.contains("完成") || message.contains("成功") ->
-                0xFFC8E6C9.toInt()
-            else -> 0xFFFFFFFF.toInt()
-        }
-        transferDebugText.setTextColor(color)
-    }
-
-    private fun reattachStatusWidgets() {
+private fun reattachStatusWidgets() {
         Log.d(TAG_SDK, "重新挂载顶栏 Widget...")
         listOf(
             R.id.systemStatusWidget,
