@@ -333,9 +333,6 @@ private lateinit var landingController: LandingController
         pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
         compositeDisposable?.dispose()
         compositeDisposable = null
-        if (::liveStreamController.isInitialized && liveStreamController.isStreaming()) {
-            liveStreamController.stopStreamIfNeeded()
-        }
     }
 
     override fun onDestroy() {
