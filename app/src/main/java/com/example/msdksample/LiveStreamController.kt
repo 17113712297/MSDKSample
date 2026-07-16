@@ -59,7 +59,7 @@ class LiveStreamController(private val context: Context) {
         private const val HEALTH_CHECK_STARTUP_GRACE_MS = 15_000L
         private const val HEALTH_CHECK_CONNECT_TIMEOUT_MS = 2_500
         private const val HEALTH_CHECK_READ_TIMEOUT_MS = 2_500
-        private const val HEALTH_CHECK_MIN_RECV_30S_KBPS = 256L
+        private const val HEALTH_CHECK_MIN_RECV_BYTES_DELTA = 32L * 1024L
         private const val HEALTH_CHECK_MAX_UNHEALTHY_POLLS = 3
     }
 
@@ -639,15 +639,13 @@ class LiveStreamController(private val context: Context) {
         val missingStream = !health.streamFound
         val inactivePublish = health.streamFound && !health.publishActive
         val missingVideo = health.streamFound && !health.hasVideo
-        val lowBitrate = health.recv30sKbps != null && health.recv30sKbps < HEALTH_CHECK_MIN_RECV_30S_KBPS
-        val stalledInput = recvBytesDelta != null && recvBytesDelta == 0L
+        val stalledInput = recvBytesDelta != null && recvBytesDelta < HEALTH_CHECK_MIN_RECV_BYTES_DELTA
 
         val unhealthyReason = when {
             missingStream -> "SRS stream $streamPath not found"
             inactivePublish -> "SRS publish inactive for $streamPath"
             missingVideo -> "SRS reports no video track for $streamPath"
-            stalledInput -> "SRS receive bytes stalled for $streamPath in ${HEALTH_CHECK_INTERVAL_MS / 1000}s"
-            lowBitrate -> "SRS recv_30s too low for $streamPath: ${health.recv30sKbps} kbps"
+            stalledInput -> "SRS receive bytes too low for $streamPath: +$recvBytesDelta in ${HEALTH_CHECK_INTERVAL_MS / 1000}s"
             else -> null
         }
 
