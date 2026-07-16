@@ -60,7 +60,6 @@ class LiveStreamController(private val context: Context) {
         private const val HEALTH_CHECK_CONNECT_TIMEOUT_MS = 2_500
         private const val HEALTH_CHECK_READ_TIMEOUT_MS = 2_500
         private const val HEALTH_CHECK_MIN_RECV_30S_KBPS = 256L
-        private const val HEALTH_CHECK_MIN_FRAME_DELTA = 3L
         private const val HEALTH_CHECK_MAX_UNHEALTHY_POLLS = 3
     }
 
@@ -68,6 +67,7 @@ class LiveStreamController(private val context: Context) {
         val streamFound: Boolean,
         val publishActive: Boolean,
         val recv30sKbps: Long?,
+        val recvBytes: Long?,
         val frames: Long?,
         val hasVideo: Boolean,
         val matchedStreamName: String?,
@@ -97,7 +97,7 @@ class LiveStreamController(private val context: Context) {
     )
     private var healthCheckExecutor: ScheduledExecutorService? = null
     @Volatile private var streamStartedAtElapsedMs = 0L
-    @Volatile private var lastObservedFrameCount: Long? = null
+    @Volatile private var lastObservedRecvBytes: Long? = null
     @Volatile private var consecutiveUnhealthyPolls = 0
 
     var onStateChanged: ((LiveStreamUiState) -> Unit)? = null
@@ -570,7 +570,7 @@ class LiveStreamController(private val context: Context) {
 
     private fun startStreamHealthMonitor() {
         streamStartedAtElapsedMs = SystemClock.elapsedRealtime()
-        lastObservedFrameCount = null
+        lastObservedRecvBytes = null
         consecutiveUnhealthyPolls = 0
         if (healthCheckExecutor != null) {
             return
@@ -593,7 +593,7 @@ class LiveStreamController(private val context: Context) {
         healthCheckExecutor?.shutdownNow()
         healthCheckExecutor = null
         streamStartedAtElapsedMs = 0L
-        lastObservedFrameCount = null
+        lastObservedRecvBytes = null
         consecutiveUnhealthyPolls = 0
         Log.i(TAG, "Stopped RTMP health monitor")
     }
@@ -623,26 +623,30 @@ class LiveStreamController(private val context: Context) {
         }
 
         val health = querySrsStreamHealth(parsedAddress.host, streamPath)
-        val currentFrames = health.frames
-        val previousFrames = lastObservedFrameCount
-        val frameDelta = if (previousFrames != null && currentFrames != null && currentFrames >= previousFrames) {
-            currentFrames - previousFrames
+        val currentRecvBytes = health.recvBytes
+        val previousRecvBytes = lastObservedRecvBytes
+        val recvBytesDelta = if (
+            previousRecvBytes != null &&
+            currentRecvBytes != null &&
+            currentRecvBytes >= previousRecvBytes
+        ) {
+            currentRecvBytes - previousRecvBytes
         } else {
             null
         }
-        lastObservedFrameCount = currentFrames ?: previousFrames
+        lastObservedRecvBytes = currentRecvBytes
 
         val missingStream = !health.streamFound
         val inactivePublish = health.streamFound && !health.publishActive
         val missingVideo = health.streamFound && !health.hasVideo
         val lowBitrate = health.recv30sKbps != null && health.recv30sKbps < HEALTH_CHECK_MIN_RECV_30S_KBPS
-        val stalledFrames = frameDelta != null && frameDelta < HEALTH_CHECK_MIN_FRAME_DELTA
+        val stalledInput = recvBytesDelta != null && recvBytesDelta == 0L
 
         val unhealthyReason = when {
             missingStream -> "SRS stream $streamPath not found"
             inactivePublish -> "SRS publish inactive for $streamPath"
             missingVideo -> "SRS reports no video track for $streamPath"
-            stalledFrames -> "SRS frame count stalled for $streamPath: +$frameDelta in ${HEALTH_CHECK_INTERVAL_MS / 1000}s"
+            stalledInput -> "SRS receive bytes stalled for $streamPath in ${HEALTH_CHECK_INTERVAL_MS / 1000}s"
             lowBitrate -> "SRS recv_30s too low for $streamPath: ${health.recv30sKbps} kbps"
             else -> null
         }
@@ -651,7 +655,7 @@ class LiveStreamController(private val context: Context) {
             consecutiveUnhealthyPolls = 0
             Log.d(
                 TAG,
-                "RTMP health ok for ${health.matchedStreamName ?: streamPath}: recv30s=${health.recv30sKbps}kbps frames=${health.frames} delta=${frameDelta ?: "n/a"}"
+                "RTMP health ok for ${health.matchedStreamName ?: streamPath}: recv30s=${health.recv30sKbps}kbps recvBytes=${health.recvBytes} delta=${recvBytesDelta ?: "n/a"} frames=${health.frames}"
             )
             return
         }
@@ -695,6 +699,7 @@ class LiveStreamController(private val context: Context) {
                     streamFound = false,
                     publishActive = false,
                     recv30sKbps = null,
+                    recvBytes = null,
                     frames = null,
                     hasVideo = false,
                     matchedStreamName = null,
@@ -704,20 +709,21 @@ class LiveStreamController(private val context: Context) {
             val publishActive = optBooleanFlexible(matchedStream.opt("publish"), "active")
             val video = matchedStream.optJSONObject("video")
             val recv30sKbps = optLongFlexible(matchedStream.optJSONObject("kbps"), "recv_30s")
+            val recvBytes = optLongFlexible(matchedStream, "recv_bytes")
             val frames = optLongFlexible(matchedStream, "frames")
                 ?: optLongFlexible(video, "frames")
-            val matchedName = matchedStream.optString("name").ifBlank {
-                buildSrsStreamPath(matchedStream).orEmpty()
-            }.ifBlank { null }
+            val matchedName = buildSrsStreamPath(matchedStream)
+                ?: matchedStream.optString("name").ifBlank { null }
 
             return SrsStreamHealth(
                 streamFound = true,
                 publishActive = publishActive,
                 recv30sKbps = recv30sKbps,
+                recvBytes = recvBytes,
                 frames = frames,
                 hasVideo = video != null && video.length() > 0,
                 matchedStreamName = matchedName,
-                detail = "matched=${matchedName ?: targetStreamPath} recv30s=${recv30sKbps ?: -1}kbps frames=${frames ?: -1}"
+                detail = "matched=${matchedName ?: targetStreamPath} recv30s=${recv30sKbps ?: -1}kbps recvBytes=${recvBytes ?: -1} frames=${frames ?: -1}"
             )
         } finally {
             connection.disconnect()
@@ -742,14 +748,11 @@ class LiveStreamController(private val context: Context) {
     }
 
     private fun findMatchingSrsStream(streams: JSONArray, targetStreamPath: String): JSONObject? {
+        val normalizedTargetPath = "/${targetStreamPath.trim('/')}"
         for (index in 0 until streams.length()) {
             val stream = streams.optJSONObject(index) ?: continue
-            val name = stream.optString("name")
             val derivedPath = buildSrsStreamPath(stream)
-            if (name == targetStreamPath || derivedPath == targetStreamPath) {
-                return stream
-            }
-            if (name.endsWith(targetStreamPath) || derivedPath?.endsWith(targetStreamPath) == true) {
+            if (derivedPath == normalizedTargetPath) {
                 return stream
             }
         }
@@ -757,8 +760,15 @@ class LiveStreamController(private val context: Context) {
     }
 
     private fun buildSrsStreamPath(stream: JSONObject): String? {
+        val url = stream.optString("url").trim().substringBefore('?')
+        if (url.isNotBlank()) {
+            return "/${url.trim('/')}"
+        }
+
         val app = stream.optString("app").trim()
-        val streamName = stream.optString("stream").trim()
+        val streamName = stream.optString("name").ifBlank {
+            stream.optString("stream")
+        }.trim()
         if (app.isBlank() || streamName.isBlank()) {
             return null
         }
