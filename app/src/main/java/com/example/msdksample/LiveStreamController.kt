@@ -3,7 +3,9 @@ package com.example.msdksample
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import com.example.msdksample.network.StreamAddressResolver
 import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.key.ProductKey
 import dji.sdk.keyvalue.value.common.ComponentIndexType
@@ -20,6 +22,14 @@ import dji.v5.manager.datacenter.livestream.StreamQuality
 import dji.v5.manager.datacenter.livestream.settings.RtmpSettings
 import dji.v5.manager.interfaces.ICameraStreamManager
 import dji.v5.manager.interfaces.ILiveStreamManager
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 data class LiveStreamCommandResult(
     val accepted: Boolean,
@@ -44,7 +54,25 @@ class LiveStreamController(private val context: Context) {
         private const val MSG_NOT_CONNECTED = "Aircraft is not connected"
         private const val MSG_EMPTY_URL = "RTMP address is empty"
         private const val MSG_UNSUPPORTED_CODEC = "Unsupported video codec. Please switch the aircraft stream to H.264."
+        private const val SRS_API_PORT = 1985
+        private const val HEALTH_CHECK_INTERVAL_MS = 5_000L
+        private const val HEALTH_CHECK_STARTUP_GRACE_MS = 15_000L
+        private const val HEALTH_CHECK_CONNECT_TIMEOUT_MS = 2_500
+        private const val HEALTH_CHECK_READ_TIMEOUT_MS = 2_500
+        private const val HEALTH_CHECK_MIN_RECV_30S_KBPS = 256L
+        private const val HEALTH_CHECK_MIN_FRAME_DELTA = 3L
+        private const val HEALTH_CHECK_MAX_UNHEALTHY_POLLS = 3
     }
+
+    private data class SrsStreamHealth(
+        val streamFound: Boolean,
+        val publishActive: Boolean,
+        val recv30sKbps: Long?,
+        val frames: Long?,
+        val hasVideo: Boolean,
+        val matchedStreamName: String?,
+        val detail: String
+    )
 
     private val liveStreamManager: ILiveStreamManager
         get() = MediaDataCenter.getInstance().getLiveStreamManager()
@@ -58,15 +86,19 @@ class LiveStreamController(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
-    private var actionInFlight = false
+    @Volatile private var actionInFlight = false
     private var statusListenerRegistered = false
     private var receiveStreamListenerRegistered = false
     private var latestMimeType: ICameraStreamManager.MimeType? = null
     @Volatile private var pendingRecoveryReason: String? = null
-    private var lastState = LiveStreamUiState(
+    @Volatile private var lastState = LiveStreamUiState(
         streamAddress = getConfiguredStreamAddress(),
         streamStatusText = "Ready to stream"
     )
+    private var healthCheckExecutor: ScheduledExecutorService? = null
+    @Volatile private var streamStartedAtElapsedMs = 0L
+    @Volatile private var lastObservedFrameCount: Long? = null
+    @Volatile private var consecutiveUnhealthyPolls = 0
 
     var onStateChanged: ((LiveStreamUiState) -> Unit)? = null
 
@@ -159,6 +191,7 @@ class LiveStreamController(private val context: Context) {
     }
 
     fun release() {
+        stopStreamHealthMonitor()
         if (statusListenerRegistered) {
             runCatching { liveStreamManager.removeLiveStreamStatusListener(statusListener) }
             statusListenerRegistered = false
@@ -412,9 +445,7 @@ class LiveStreamController(private val context: Context) {
     }
 
     fun recoverAfterMediaTransfer(reason: String) {
-        pendingRecoveryReason = reason
-        Log.i(TAG, "Request RTMP recovery after media transfer: $reason")
-        scheduleRecoveryAttempt(0, 0L)
+        requestStreamRecovery("media transfer: $reason")
     }
 
     private fun ensureStatusListener() {
@@ -461,6 +492,17 @@ class LiveStreamController(private val context: Context) {
         return runCatching {
             KeyManager.getInstance().getValue(KeyTools.createKey(ProductKey.KeyConnection)) ?: false
         }.getOrDefault(false)
+    }
+
+    private fun requestStreamRecovery(reason: String) {
+        if (pendingRecoveryReason != null) {
+            Log.i(TAG, "Ignore duplicate RTMP recovery request while one is pending: $reason")
+            return
+        }
+
+        pendingRecoveryReason = reason
+        Log.i(TAG, "Request RTMP recovery: $reason")
+        scheduleRecoveryAttempt(0, 0L)
     }
 
     private fun scheduleRecoveryAttempt(attempt: Int, delayMs: Long) {
@@ -517,7 +559,236 @@ class LiveStreamController(private val context: Context) {
     }
 
     private fun publishState(state: LiveStreamUiState) {
+        val wasStreaming = lastState.isStreaming
         lastState = state
+        when {
+            state.isStreaming && !wasStreaming -> startStreamHealthMonitor()
+            !state.isStreaming && wasStreaming -> stopStreamHealthMonitor()
+        }
         onStateChanged?.invoke(state)
+    }
+
+    private fun startStreamHealthMonitor() {
+        streamStartedAtElapsedMs = SystemClock.elapsedRealtime()
+        lastObservedFrameCount = null
+        consecutiveUnhealthyPolls = 0
+        if (healthCheckExecutor != null) {
+            return
+        }
+
+        healthCheckExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "rtmp-health-check").apply { isDaemon = true }
+        }.also { executor ->
+            executor.scheduleAtFixedRate(
+                { runStreamHealthCheckSafely() },
+                HEALTH_CHECK_INTERVAL_MS,
+                HEALTH_CHECK_INTERVAL_MS,
+                TimeUnit.MILLISECONDS
+            )
+        }
+        Log.i(TAG, "Started RTMP health monitor")
+    }
+
+    private fun stopStreamHealthMonitor() {
+        healthCheckExecutor?.shutdownNow()
+        healthCheckExecutor = null
+        streamStartedAtElapsedMs = 0L
+        lastObservedFrameCount = null
+        consecutiveUnhealthyPolls = 0
+        Log.i(TAG, "Stopped RTMP health monitor")
+    }
+
+    private fun runStreamHealthCheckSafely() {
+        runCatching { runStreamHealthCheck() }
+            .onFailure { error ->
+                Log.w(TAG, "RTMP health check failed: ${error.message}")
+            }
+    }
+
+    private fun runStreamHealthCheck() {
+        if (!lastState.isStreaming || actionInFlight || pendingRecoveryReason != null) {
+            return
+        }
+        if (SystemClock.elapsedRealtime() - streamStartedAtElapsedMs < HEALTH_CHECK_STARTUP_GRACE_MS) {
+            return
+        }
+
+        val parsedAddress = StreamAddressResolver.parse(getConfiguredStreamAddress()) ?: run {
+            Log.w(TAG, "Skip RTMP health check because stream address cannot be parsed")
+            return
+        }
+        val streamPath = parsedAddress.streamPath ?: run {
+            Log.w(TAG, "Skip RTMP health check because app/stream cannot be resolved from RTMP URL")
+            return
+        }
+
+        val health = querySrsStreamHealth(parsedAddress.host, streamPath)
+        val currentFrames = health.frames
+        val previousFrames = lastObservedFrameCount
+        val frameDelta = if (previousFrames != null && currentFrames != null && currentFrames >= previousFrames) {
+            currentFrames - previousFrames
+        } else {
+            null
+        }
+        lastObservedFrameCount = currentFrames ?: previousFrames
+
+        val missingStream = !health.streamFound
+        val inactivePublish = health.streamFound && !health.publishActive
+        val missingVideo = health.streamFound && !health.hasVideo
+        val lowBitrate = health.recv30sKbps != null && health.recv30sKbps < HEALTH_CHECK_MIN_RECV_30S_KBPS
+        val stalledFrames = frameDelta != null && frameDelta < HEALTH_CHECK_MIN_FRAME_DELTA
+
+        val unhealthyReason = when {
+            missingStream -> "SRS stream $streamPath not found"
+            inactivePublish -> "SRS publish inactive for $streamPath"
+            missingVideo -> "SRS reports no video track for $streamPath"
+            stalledFrames -> "SRS frame count stalled for $streamPath: +$frameDelta in ${HEALTH_CHECK_INTERVAL_MS / 1000}s"
+            lowBitrate -> "SRS recv_30s too low for $streamPath: ${health.recv30sKbps} kbps"
+            else -> null
+        }
+
+        if (unhealthyReason == null) {
+            consecutiveUnhealthyPolls = 0
+            Log.d(
+                TAG,
+                "RTMP health ok for ${health.matchedStreamName ?: streamPath}: recv30s=${health.recv30sKbps}kbps frames=${health.frames} delta=${frameDelta ?: "n/a"}"
+            )
+            return
+        }
+
+        consecutiveUnhealthyPolls += 1
+        Log.w(
+            TAG,
+            "RTMP health unhealthy (${consecutiveUnhealthyPolls}/$HEALTH_CHECK_MAX_UNHEALTHY_POLLS): $unhealthyReason; ${health.detail}"
+        )
+        if (consecutiveUnhealthyPolls < HEALTH_CHECK_MAX_UNHEALTHY_POLLS) {
+            return
+        }
+
+        consecutiveUnhealthyPolls = 0
+        requestStreamRecovery("SRS health check failed: $unhealthyReason")
+    }
+
+    private fun querySrsStreamHealth(host: String, targetStreamPath: String): SrsStreamHealth {
+        val requestUrl = "http://$host:$SRS_API_PORT/api/v1/streams/"
+        val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = HEALTH_CHECK_CONNECT_TIMEOUT_MS
+            readTimeout = HEALTH_CHECK_READ_TIMEOUT_MS
+            setRequestProperty("Accept", "application/json")
+        }
+
+        try {
+            val statusCode = connection.responseCode
+            val body = (if (statusCode in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader(StandardCharsets.UTF_8)
+                ?.use { it.readText() }
+                .orEmpty()
+            if (statusCode !in 200..299) {
+                throw IllegalStateException("HTTP $statusCode from $requestUrl: $body")
+            }
+
+            val root = JSONObject(body)
+            val streams = extractSrsStreams(root)
+            val matchedStream = findMatchingSrsStream(streams, targetStreamPath)
+                ?: return SrsStreamHealth(
+                    streamFound = false,
+                    publishActive = false,
+                    recv30sKbps = null,
+                    frames = null,
+                    hasVideo = false,
+                    matchedStreamName = null,
+                    detail = "SRS returned ${streams.length()} streams"
+                )
+
+            val publishActive = optBooleanFlexible(matchedStream.opt("publish"), "active")
+            val video = matchedStream.optJSONObject("video")
+            val recv30sKbps = optLongFlexible(matchedStream.optJSONObject("kbps"), "recv_30s")
+            val frames = optLongFlexible(matchedStream, "frames")
+                ?: optLongFlexible(video, "frames")
+            val matchedName = matchedStream.optString("name").ifBlank {
+                buildSrsStreamPath(matchedStream).orEmpty()
+            }.ifBlank { null }
+
+            return SrsStreamHealth(
+                streamFound = true,
+                publishActive = publishActive,
+                recv30sKbps = recv30sKbps,
+                frames = frames,
+                hasVideo = video != null && video.length() > 0,
+                matchedStreamName = matchedName,
+                detail = "matched=${matchedName ?: targetStreamPath} recv30s=${recv30sKbps ?: -1}kbps frames=${frames ?: -1}"
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun extractSrsStreams(root: JSONObject): JSONArray {
+        val directStreams = root.optJSONArray("streams")
+        if (directStreams != null) {
+            return directStreams
+        }
+
+        val data = root.opt("data")
+        if (data is JSONArray) {
+            return data
+        }
+        if (data is JSONObject) {
+            data.optJSONArray("streams")?.let { return it }
+        }
+
+        return JSONArray()
+    }
+
+    private fun findMatchingSrsStream(streams: JSONArray, targetStreamPath: String): JSONObject? {
+        for (index in 0 until streams.length()) {
+            val stream = streams.optJSONObject(index) ?: continue
+            val name = stream.optString("name")
+            val derivedPath = buildSrsStreamPath(stream)
+            if (name == targetStreamPath || derivedPath == targetStreamPath) {
+                return stream
+            }
+            if (name.endsWith(targetStreamPath) || derivedPath?.endsWith(targetStreamPath) == true) {
+                return stream
+            }
+        }
+        return null
+    }
+
+    private fun buildSrsStreamPath(stream: JSONObject): String? {
+        val app = stream.optString("app").trim()
+        val streamName = stream.optString("stream").trim()
+        if (app.isBlank() || streamName.isBlank()) {
+            return null
+        }
+        return "/$app/$streamName"
+    }
+
+    private fun optBooleanFlexible(source: Any?, key: String): Boolean {
+        val value = when (source) {
+            is JSONObject -> source.opt(key)
+            else -> null
+        } ?: return false
+
+        return when (value) {
+            is Boolean -> value
+            is Number -> value.toInt() != 0
+            is String -> value.equals("true", ignoreCase = true) || value == "1"
+            else -> false
+        }
+    }
+
+    private fun optLongFlexible(source: JSONObject?, key: String): Long? {
+        if (source == null || !source.has(key)) {
+            return null
+        }
+
+        val value = source.opt(key)
+        return when (value) {
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull()
+            else -> null
+        }
     }
 }
