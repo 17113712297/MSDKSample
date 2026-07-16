@@ -8,6 +8,7 @@
 /opencv/build/
 /.gradle/
 /.idea/workspace.xml
+/.idea/caches/
 /.idea/.name
 /.kotlin/
 /.tmp_dji/
@@ -15,3 +16,4 @@
 
 # Claude Code local config
 CLAUDE.md
+obs_low_latency/diagnostics/

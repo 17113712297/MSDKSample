@@ -91,6 +91,7 @@ class VideoTransferManager(
     private val workerRunning = AtomicBoolean(false)
     private val countdownFutureRef = AtomicReference<ScheduledFuture<*>?>(null)
     var statusCallback: ((String) -> Unit)? = null
+    var onTransferFinished: ((Boolean, String) -> Unit)? = null
 
     fun enqueueLatestVideoTransfer(command: VideoUploadCommand) {
         sharedPendingTransfer.set(command)
@@ -184,11 +185,20 @@ class VideoTransferManager(
     }
 
     private fun runTransferSafely(command: VideoUploadCommand) {
+        var success = false
+        var summary = "Video transfer completed"
         runCatching {
             transferLatestVideo(command)
+            success = true
         }.onFailure { error ->
+            summary = error.message ?: "Unknown transfer error"
             Log.w(TAG, "Latest video transfer failed: ${error.message}", error)
             emitStatus("视频传输失败: ${error.message ?: "未知异常"}")
+        }
+        runCatching {
+            onTransferFinished?.invoke(success, summary)
+        }.onFailure { error ->
+            Log.w(TAG, "Transfer finished callback failed: ${error.message}", error)
         }
     }
 

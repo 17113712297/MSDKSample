@@ -209,6 +209,14 @@ private lateinit var landingController: LandingController
                 cameraIndexProvider = { currentCameraIndex }
             )
             // statusCallback 未使用，保持 null
+            videoTransferManager.onTransferFinished = { success, summary ->
+                val reason = if (success) {
+                    "media transfer finished: $summary"
+                } else {
+                    "media transfer failed: $summary"
+                }
+                liveStreamController.recoverAfterMediaTransfer(reason)
+            }
             setupLiveStreamController()
             deviceStatusReportManager.start()
             landingController = LandingController()

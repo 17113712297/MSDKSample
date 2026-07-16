@@ -8,7 +8,20 @@
     <dji.v5.ux.core.widget.fpv.FPVWidget
         android:id="@+id/fpvWidget"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent" >
+
+        <Button
+            android:id="@+id/btnVelStartStop"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="启动"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            tools:layout_editor_absoluteX="15dp"
+            tools:layout_editor_absoluteY="414dp" />
+    </dji.v5.ux.core.widget.fpv.FPVWidget>
 
     <LinearLayout
         android:id="@+id/topBarLayout"
@@ -118,20 +131,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center"
+            android:paddingBottom="5dp"
             android:text="速度控制"
             android:textColor="#B3FFFFFF"
-            android:textSize="12sp"
-            android:paddingBottom="5dp" />
-
-        <Button
-            android:id="@+id/btnVelStartStop"
-            android:layout_width="match_parent"
-            android:layout_height="38dp"
-            android:backgroundTint="#4F5560"
-            android:padding="0dp"
-            android:text="启动"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp" />
+            android:textSize="12sp" />
 
         <Button
             android:id="@+id/btnVelZero"

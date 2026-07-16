@@ -1,6 +1,8 @@
 package com.example.msdksample
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.key.ProductKey
@@ -53,12 +55,14 @@ class LiveStreamController(private val context: Context) {
     private val prefs by lazy {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
     private var actionInFlight = false
     private var statusListenerRegistered = false
     private var receiveStreamListenerRegistered = false
     private var latestMimeType: ICameraStreamManager.MimeType? = null
+    @Volatile private var pendingRecoveryReason: String? = null
     private var lastState = LiveStreamUiState(
         streamAddress = getConfiguredStreamAddress(),
         streamStatusText = "Ready to stream"
@@ -378,6 +382,9 @@ class LiveStreamController(private val context: Context) {
                         isError = address.isBlank() || !isCodecSupported()
                     )
                 )
+                if (pendingRecoveryReason != null) {
+                    scheduleRecoveryAttempt(1, 1200L)
+                }
             }
 
             override fun onFailure(error: IDJIError) {
@@ -389,6 +396,9 @@ class LiveStreamController(private val context: Context) {
                         isError = true
                     )
                 )
+                if (pendingRecoveryReason != null) {
+                    scheduleRecoveryAttempt(1, 1200L)
+                }
             }
         })
 
@@ -399,6 +409,12 @@ class LiveStreamController(private val context: Context) {
         if (runCatching { liveStreamManager.isStreaming() }.getOrDefault(false)) {
             stopLiveStream()
         }
+    }
+
+    fun recoverAfterMediaTransfer(reason: String) {
+        pendingRecoveryReason = reason
+        Log.i(TAG, "Request RTMP recovery after media transfer: $reason")
+        scheduleRecoveryAttempt(0, 0L)
     }
 
     private fun ensureStatusListener() {
@@ -445,6 +461,59 @@ class LiveStreamController(private val context: Context) {
         return runCatching {
             KeyManager.getInstance().getValue(KeyTools.createKey(ProductKey.KeyConnection)) ?: false
         }.getOrDefault(false)
+    }
+
+    private fun scheduleRecoveryAttempt(attempt: Int, delayMs: Long) {
+        mainHandler.postDelayed({
+            restartStreamForRecovery(attempt)
+        }, delayMs)
+    }
+
+    private fun restartStreamForRecovery(attempt: Int) {
+        val reason = pendingRecoveryReason ?: return
+        if (attempt >= 8) {
+            Log.w(TAG, "Give up RTMP recovery after repeated attempts: $reason")
+            pendingRecoveryReason = null
+            return
+        }
+
+        if (!isProductConnected()) {
+            Log.w(TAG, "Skip RTMP recovery because aircraft is not connected yet")
+            scheduleRecoveryAttempt(attempt + 1, 2000L)
+            return
+        }
+
+        if (actionInFlight) {
+            scheduleRecoveryAttempt(attempt + 1, 750L)
+            return
+        }
+
+        val managerStreaming = runCatching { liveStreamManager.isStreaming() }.getOrDefault(false)
+        if (managerStreaming) {
+            val stopResult = stopLiveStream()
+            if (!stopResult.accepted && stopResult.message != "A stream action is already in progress") {
+                scheduleRecoveryAttempt(attempt + 1, 1200L)
+            }
+            return
+        }
+
+        updateLiveStreamCameraSource(currentCameraIndex)
+        refreshConfiguredStreamAddress()
+        val startResult = startRtmpLiveStream()
+        when {
+            startResult.accepted -> {
+                Log.i(TAG, "RTMP recovery start requested: $reason")
+                pendingRecoveryReason = null
+            }
+            startResult.message == "The stream is already running" -> {
+                Log.i(TAG, "RTMP recovery skipped because stream is already running")
+                pendingRecoveryReason = null
+            }
+            else -> {
+                Log.w(TAG, "RTMP recovery attempt failed: ${startResult.message}")
+                scheduleRecoveryAttempt(attempt + 1, 1500L)
+            }
+        }
     }
 
     private fun publishState(state: LiveStreamUiState) {

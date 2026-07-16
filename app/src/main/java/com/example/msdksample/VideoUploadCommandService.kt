@@ -39,6 +39,14 @@ class VideoUploadCommandService : Service() {
             cameraIndexProvider = { ComponentIndexType.LEFT_OR_MAIN }
         ).also { manager ->
             manager.statusCallback = { status -> Log.i(TAG, status) }
+            manager.onTransferFinished = { success, summary ->
+                val reason = if (success) {
+                    "command transfer finished: $summary"
+                } else {
+                    "command transfer failed: $summary"
+                }
+                streamController.recoverAfterMediaTransfer(reason)
+            }
         }
         commandServer = VideoCommandHttpServer { command ->
             videoTransferManager.enqueueLatestVideoTransfer(command)

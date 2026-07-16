@@ -3,7 +3,11 @@
     PORT: "7000",
     WHEP_URL: "http://127.0.0.1:1985/rtc/v1/whep/?app=live&stream=obs1",
     AUTO_PLAY: true,
-    SHOW_RECONNECT: true
+    SHOW_RECONNECT: true,
+    STATS_INTERVAL_MS: 2000,
+    STALL_TIMEOUT_MS: 6000,
+    LOW_FPS_TIMEOUT_MS: 10000,
+    MIN_DECODE_FPS: 2
   };
 
   const config = Object.assign({}, defaultConfig, window.APP_CONFIG || {});
@@ -24,6 +28,8 @@
   let peer = null;
   let sessionUrl = null;
   let reconnectTimer = null;
+  let watchdogTimer = null;
+  let reconnectAttempts = 0;
   let manuallyStopped = false;
 
   const states = {
@@ -78,6 +84,108 @@
     }
   }
 
+  function clearMediaWatchdog() {
+    if (watchdogTimer) {
+      window.clearInterval(watchdogTimer);
+      watchdogTimer = null;
+    }
+  }
+
+  function startMediaWatchdog(nextPeer) {
+    clearMediaWatchdog();
+
+    let lastStatsAt = Date.now();
+    let lastMediaProgressAt = lastStatsAt;
+    let lastDecodedFrames = null;
+    let lastVideoTime = video.currentTime;
+    let lowFpsSince = null;
+    let pollInFlight = false;
+
+    watchdogTimer = window.setInterval(async () => {
+      if (pollInFlight) {
+        return;
+      }
+
+      if (
+        document.hidden ||
+        peer !== nextPeer ||
+        nextPeer.connectionState !== "connected"
+      ) {
+        lastStatsAt = Date.now();
+        lastMediaProgressAt = lastStatsAt;
+        lowFpsSince = null;
+        return;
+      }
+
+      pollInFlight = true;
+      try {
+        const now = Date.now();
+        const reports = await nextPeer.getStats();
+        let inboundVideo = null;
+        reports.forEach((report) => {
+          if (report.type === "inbound-rtp" && report.kind === "video" && !report.isRemote) {
+            inboundVideo = report;
+          }
+        });
+
+        if (!inboundVideo) {
+          return;
+        }
+
+        const decodedFrames = Number.isFinite(inboundVideo.framesDecoded)
+          ? inboundVideo.framesDecoded
+          : null;
+        const videoTime = video.currentTime;
+        const elapsedSeconds = Math.max((now - lastStatsAt) / 1000, 0.001);
+        const decodedDelta = decodedFrames !== null && lastDecodedFrames !== null
+          ? Math.max(decodedFrames - lastDecodedFrames, 0)
+          : null;
+        const decodeFps = decodedDelta !== null ? decodedDelta / elapsedSeconds : null;
+        const madeProgress =
+          (decodedDelta !== null && decodedDelta > 0) || videoTime > lastVideoTime + 0.01;
+
+        if (madeProgress) {
+          lastMediaProgressAt = now;
+        }
+
+        if (decodeFps !== null && decodeFps < Number(config.MIN_DECODE_FPS)) {
+          lowFpsSince = lowFpsSince || now;
+        } else {
+          lowFpsSince = null;
+        }
+
+        const stalledForMs = now - lastMediaProgressAt;
+        const lowFpsForMs = lowFpsSince ? now - lowFpsSince : 0;
+        if (
+          stalledForMs >= Number(config.STALL_TIMEOUT_MS) ||
+          lowFpsForMs >= Number(config.LOW_FPS_TIMEOUT_MS)
+        ) {
+          console.warn("WebRTC media stalled; rebuilding WHEP session", {
+            stalledForMs,
+            lowFpsForMs,
+            decodeFps,
+            framesDecoded: decodedFrames,
+            framesDropped: inboundVideo.framesDropped,
+            packetsLost: inboundVideo.packetsLost,
+            jitter: inboundVideo.jitter,
+            bytesReceived: inboundVideo.bytesReceived
+          });
+          clearMediaWatchdog();
+          scheduleReconnect("检测到直播画面停滞，正在自动重建 WebRTC 会话。");
+          return;
+        }
+
+        lastStatsAt = now;
+        lastDecodedFrames = decodedFrames;
+        lastVideoTime = videoTime;
+      } catch (error) {
+        console.warn("Failed to read WebRTC receive stats", error);
+      } finally {
+        pollInFlight = false;
+      }
+    }, Number(config.STATS_INTERVAL_MS));
+  }
+
   function waitForIceGatheringComplete(nextPeer) {
     if (nextPeer.iceGatheringState === "complete") {
       return Promise.resolve();
@@ -101,42 +209,50 @@
 
   async function closeSession() {
     clearReconnectTimer();
-    if (peer) {
-      peer.ontrack = null;
-      peer.onconnectionstatechange = null;
-      peer.oniceconnectionstatechange = null;
-      peer.getSenders().forEach((sender) => {
+    clearMediaWatchdog();
+
+    const peerToClose = peer;
+    peer = null;
+    if (peerToClose) {
+      peerToClose.ontrack = null;
+      peerToClose.onconnectionstatechange = null;
+      peerToClose.oniceconnectionstatechange = null;
+      peerToClose.getReceivers().forEach((receiver) => {
         try {
-          if (sender.track) {
-            sender.track.stop();
+          if (receiver.track) {
+            receiver.track.stop();
           }
         } catch (error) {
         }
       });
-      peer.close();
-      peer = null;
+      peerToClose.close();
     }
 
-    if (sessionUrl) {
+    const sessionUrlToDelete = sessionUrl;
+    sessionUrl = null;
+    if (sessionUrlToDelete) {
       try {
-        await fetch(sessionUrl, { method: "DELETE" });
+        await fetch(sessionUrlToDelete, { method: "DELETE", keepalive: true });
       } catch (error) {
       }
-      sessionUrl = null;
     }
 
     video.srcObject = null;
   }
 
   function scheduleReconnect(reason) {
-    if (!config.SHOW_RECONNECT || manuallyStopped) {
+    if (manuallyStopped) {
       return;
     }
-    clearReconnectTimer();
     setUiState("failed", reason || states.failed.copy);
+    if (!config.SHOW_RECONNECT || reconnectTimer) {
+      return;
+    }
+    const delayMs = Math.min(1500 * Math.pow(2, reconnectAttempts), 10000);
+    reconnectAttempts += 1;
     reconnectTimer = window.setTimeout(() => {
       startPlayback(true);
-    }, 1500);
+    }, delayMs);
   }
 
   async function startPlayback(isRetry) {
@@ -150,6 +266,7 @@
         bundlePolicy: "max-bundle",
         iceServers: []
       });
+      peer = nextPeer;
 
       nextPeer.addTransceiver("video", { direction: "recvonly" });
       nextPeer.addTransceiver("audio", { direction: "recvonly" });
@@ -166,7 +283,10 @@
       nextPeer.onconnectionstatechange = function () {
         const connectionState = nextPeer.connectionState;
         if (connectionState === "connected") {
+          clearReconnectTimer();
+          reconnectAttempts = 0;
           setUiState("playing");
+          startMediaWatchdog(nextPeer);
         } else if (connectionState === "failed" || connectionState === "disconnected") {
           scheduleReconnect("WebRTC 连接中断，正在尝试重连。");
         }
@@ -206,8 +326,6 @@
         sdp: answerSdp
       });
 
-      peer = nextPeer;
-
       try {
         await video.play();
       } catch (error) {
@@ -217,11 +335,8 @@
     } catch (error) {
       await closeSession();
       const message = error && error.message ? error.message : "未知错误";
-      if (isRetry) {
-        setUiState("failed", "重连失败: " + message);
-      } else {
-        scheduleReconnect("首次连接失败: " + message);
-      }
+      const prefix = isRetry ? "重连失败: " : "首次连接失败: ";
+      scheduleReconnect(prefix + message);
     }
   }
 
@@ -232,10 +347,12 @@
   }
 
   reconnectButton.addEventListener("click", function () {
-    startPlayback(true);
+    reconnectAttempts = 0;
+    startPlayback(false);
   });
 
   startButton.addEventListener("click", function () {
+    reconnectAttempts = 0;
     startPlayback(false);
   });
 
@@ -248,6 +365,11 @@
       video.play().catch(function () {
       });
     }
+  });
+
+  window.addEventListener("pagehide", function () {
+    manuallyStopped = true;
+    closeSession();
   });
 
   renderConfig();

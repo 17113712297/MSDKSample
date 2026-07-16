@@ -3,6 +3,7 @@ services:
     image: ossrs/srs:5
     container_name: msdk-srs
     restart: unless-stopped
+    init: true
     command: ["./objs/srs", "-c", "conf/obs-local.conf"]
     ports:
       - "1935:1935"
@@ -11,3 +12,8 @@ services:
       - "8000:8000/udp"
     volumes:
       - ./srs/conf/obs-local.conf:/usr/local/srs/conf/obs-local.conf:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
