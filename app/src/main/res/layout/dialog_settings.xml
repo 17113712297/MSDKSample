@@ -1,0 +1,354 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="380dp"
+    android:layout_height="wrap_content"
+    android:background="#EE333333"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- 标题行 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="设置"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnSettingsClose"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:backgroundTint="#555555"
+            android:padding="0dp"
+            android:text="✕"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:background="#555555" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- 刷新按钮 -->
+            <Button
+                android:id="@+id/btnSettingsRefresh"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:backgroundTint="#2F80ED"
+                android:text="↻ 从服务器刷新配置"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <!-- server_ip -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="服务器 IP"
+                    android:textColor="#AADDDDDD"
+                    android:textSize="13sp" />
+                <EditText
+                    android:id="@+id/etServerIp"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="#DD555555"
+                    android:hint="10.29.3.171"
+                    android:text="10.29.3.171"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#88FFFFFF"
+                    android:textSize="12sp" />
+                <Button
+                    android:id="@+id/btnServerIp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#1976D2"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="保存"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- server_port -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="服务器端口"
+                    android:textColor="#AADDDDDD"
+                    android:textSize="13sp" />
+                <EditText
+                    android:id="@+id/etServerPort"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="#DD555555"
+                    android:hint="7000"
+                    android:text="7000"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#88FFFFFF"
+                    android:textSize="12sp"
+                    android:inputType="number" />
+                <Button
+                    android:id="@+id/btnServerPort"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#1976D2"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="保存"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- remote_controller_ip -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="遥控器 IP"
+                    android:textColor="#AADDDDDD"
+                    android:textSize="13sp" />
+                <EditText
+                    android:id="@+id/etRemoteCtrlIp"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="#DD555555"
+                    android:hint="192.168.1.100"
+                    android:text=""
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#88FFFFFF"
+                    android:textSize="12sp" />
+                <Button
+                    android:id="@+id/btnRemoteCtrlIp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#1976D2"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="保存"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- remote_controller_port -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="遥控器端口"
+                    android:textColor="#AADDDDDD"
+                    android:textSize="13sp" />
+                <EditText
+                    android:id="@+id/etRemoteCtrlPort"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="#DD555555"
+                    android:hint="20000"
+                    android:text="20000"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#88FFFFFF"
+                    android:textSize="12sp"
+                    android:inputType="number" />
+                <Button
+                    android:id="@+id/btnRemoteCtrlPort"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#1976D2"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="保存"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- ftp_server_ip -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="FTP 服务器 IP"
+                    android:textColor="#AADDDDDD"
+                    android:textSize="13sp" />
+                <EditText
+                    android:id="@+id/etFtpServerIp"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="#DD555555"
+                    android:hint="10.29.3.171"
+                    android:text="10.29.3.171"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#88FFFFFF"
+                    android:textSize="12sp" />
+                <Button
+                    android:id="@+id/btnFtpServerIp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#1976D2"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="保存"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- ftp_server_port -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="FTP 端口"
+                    android:textColor="#AADDDDDD"
+                    android:textSize="13sp" />
+                <EditText
+                    android:id="@+id/etFtpServerPort"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="#DD555555"
+                    android:hint="2121"
+                    android:text="2121"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#88FFFFFF"
+                    android:textSize="12sp"
+                    android:inputType="number" />
+                <Button
+                    android:id="@+id/btnFtpServerPort"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#1976D2"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="保存"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- local_port -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="100dp"
+                    android:layout_height="wrap_content"
+                    android:text="本地端口"
+                    android:textColor="#AADDDDDD"
+                    android:textSize="13sp" />
+                <EditText
+                    android:id="@+id/etLocalPort"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:background="#DD555555"
+                    android:hint="21234"
+                    android:text="21234"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#88FFFFFF"
+                    android:textSize="12sp"
+                    android:inputType="number" />
+                <Button
+                    android:id="@+id/btnLocalPort"
+                    android:layout_width="wrap_content"
+                    android:layout_height="32dp"
+                    android:layout_marginStart="4dp"
+                    android:backgroundTint="#1976D2"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:text="保存"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <!-- 重启 HTTP 按钮 -->
+            <Button
+                android:id="@+id/btnSettingsRestartHttp"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="10dp"
+                android:backgroundTint="#F2994A"
+                android:text="重启 HTTP 服务"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <TextView
+        android:id="@+id/tvSettingsStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:gravity="center"
+        android:text="● 就绪"
+        android:textColor="#AAAAAA"
+        android:textSize="13sp" />
+
+</LinearLayout>

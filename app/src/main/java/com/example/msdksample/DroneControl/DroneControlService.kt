@@ -377,7 +377,9 @@ class DroneControlService : Service() {
                         DroneCommProtocol.CMD_CRUISE_START.toInt() and 0xFF,
                         DroneCommProtocol.CMD_CRUISE_SELECT_WP.toInt() and 0xFF,
                         DroneCommProtocol.CMD_CRUISE_SET_SERVER.toInt() and 0xFF,
-                        DroneCommProtocol.CMD_CRUISE_SET_GIMBAL_PITCH.toInt() and 0xFF -> "mode"
+                        DroneCommProtocol.CMD_CRUISE_SET_GIMBAL_PITCH.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_SETTINGS_UPDATE.toInt() and 0xFF,
+                        DroneCommProtocol.CMD_SETTINGS_RESTART_HTTP.toInt() and 0xFF -> "mode"
                         else -> null
                     }
                     if (cmdName != null) {
@@ -403,6 +405,14 @@ class DroneControlService : Service() {
                 Log.i(TAG, "WP FILE_LIST_RESPONSE: $fileList")
                 mainHandler.post {
                     modeController?.onFileListResponse(fileList, isMap = false)
+                }
+            }
+
+            // ── ★ 设置配置响应 ─────────────────────────────────
+            DroneCommProtocol.CMD_SETTINGS_RESPONSE -> {
+                Log.i(TAG, "SETTINGS_RESPONSE: payload.size=${frame.payload.size}")
+                mainHandler.post {
+                    modeController?.onSettingsResponsePayload(frame.payload)
                 }
             }
 

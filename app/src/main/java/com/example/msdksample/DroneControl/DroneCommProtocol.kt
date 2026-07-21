@@ -146,10 +146,18 @@ object DroneCommProtocol {
     const val CMD_CRUISE_SET_GIMBAL_PITCH: Byte = 0x71  // 设置云台俯仰角
 
     // ═══════════════════════════════════════════════════════
-// ★ 响应指令 (0x90，Jetson → Android)
+// ★ 设置模式指令 (0x72-0x74，Android → Jetson)
+// ═══════════════════════════════════════════════════════
+    const val CMD_SETTINGS_UPDATE: Byte = 0x72  // 修改 HTTP 配置参数
+    const val CMD_SETTINGS_GET: Byte = 0x73     // 获取 HTTP 配置参数
+    const val CMD_SETTINGS_RESTART_HTTP: Byte = 0x74  // 重启 HTTP 服务
+
+    // ═══════════════════════════════════════════════════════
+// ★ 响应指令 (0x90-0x92，Jetson → Android)
 // ═══════════════════════════════════════════════════════
     const val CMD_FILE_LIST_RESPONSE:   Byte = 0x90.toByte()  // 地图文件列表响应
     const val CMD_FILE_LIST_RESPONSE_WP: Byte = 0x91.toByte()  // 航线文件列表响应
+    const val CMD_SETTINGS_RESPONSE:     Byte = 0x92.toByte()  // 设置参数响应
     // ── 载荷长度常量 ─────────────────────────────────────
     const val VEL_PAYLOAD_LEN               = 16
     const val GIMBAL_YAW_FOLLOW_PAYLOAD_LEN = 8

@@ -33,6 +33,12 @@ class ModeController {
         READY,      // 地图+航线都配好，可以起飞
     }
 
+    // 设置模式状态
+    enum class SettingsState {
+        IDLE,       // 未开始
+        UPDATED,    // 已更新
+    }
+
     companion object {
         private const val TAG = "ModeController"
     }
@@ -50,6 +56,10 @@ class ModeController {
     var cruiseState: CruiseState = CruiseState.IDLE
         private set
 
+    @Volatile
+    var settingsState: SettingsState = SettingsState.IDLE
+        private set
+
     // 文件列表缓存
     var mapFileList: List<String> = emptyList()
         private set
@@ -60,8 +70,10 @@ class ModeController {
     var onMappingStateChanged: ((MappingState) -> Unit)? = null
     var onCollectStateChanged: ((CollectState) -> Unit)? = null
     var onCruiseStateChanged: ((CruiseState) -> Unit)? = null
+    var onSettingsStateChanged: ((SettingsState) -> Unit)? = null
     var onLogMessage: ((String) -> Unit)? = null
     var onFileListUpdated: (() -> Unit)? = null
+    var onSettingsResponse: ((Map<String, String>) -> Unit)? = null  // 设置配置回读
 
     // ============================================================
     //  建图模式指令
@@ -261,6 +273,67 @@ class ModeController {
     }
 
     // ============================================================
+    //  设置模式指令
+    // ============================================================
+
+    /**
+     * 修改 HTTP 配置参数（指令 0x72）
+     * payload = JSON: {"key":"server_ip","value":"10.29.3.171"}
+     * 支持的 key: server_ip, server_port, remote_controller_ip,
+     *             remote_controller_port, ftp_server_ip, ftp_server_port, local_port
+     */
+    fun settingsUpdate(key: String, value: String) {
+        val json = "{\"key\":\"$key\",\"value\":\"$value\"}"
+        val payload = json.toByteArray(Charsets.UTF_8)
+        val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_SETTINGS_UPDATE, payload)
+        DroneControlService.sendFrame(frame)
+        Log.i(TAG, "settingsUpdate: $key = $value")
+        onLogMessage?.invoke("设置 $key = $value")
+    }
+
+    /**
+     * 获取 HTTP 配置参数（指令 0x73）
+     * 结果通过 onSettingsResponse 回调返回
+     */
+    fun settingsGet() {
+        val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_SETTINGS_GET)
+        DroneControlService.sendFrame(frame)
+        Log.i(TAG, "settingsGet")
+        onLogMessage?.invoke("正在获取配置...")
+    }
+
+    /**
+     * 重启 HTTP 服务（指令 0x74）
+     */
+    fun settingsRestartHttp() {
+        val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_SETTINGS_RESTART_HTTP)
+        DroneControlService.sendFrame(frame)
+        Log.i(TAG, "settingsRestartHttp")
+        onLogMessage?.invoke("正在重启 HTTP 服务...")
+    }
+
+    fun onSettingsResponsePayload(payload: ByteArray) {
+        val jsonStr = String(payload, Charsets.UTF_8)
+        Log.i(TAG, "onSettingsResponsePayload: $jsonStr")
+        try {
+            // 简单 JSON 解析（不用引入完整 JSON 库）
+            val config = mutableMapOf<String, String>()
+            val cleaned = jsonStr.trim().removeSurrounding("{", "}")
+            cleaned.split(",").forEach { pair ->
+                val parts = pair.split(":", limit = 2)
+                if (parts.size == 2) {
+                    val key = parts[0].trim().removeSurrounding("\"")
+                    val value = parts[1].trim().removeSurrounding("\"")
+                    config[key] = value
+                }
+            }
+            onSettingsResponse?.invoke(config)
+        } catch (e: Exception) {
+            Log.w(TAG, "onSettingsResponsePayload parse error: ${e.message}")
+        }
+    }
+
+    // ============================================================
     //  ACK 处理 — 由 DroneControlService 调用
     // ============================================================
 
@@ -339,6 +412,16 @@ class ModeController {
                     onLogMessage?.invoke("✅ 巡航已启动（起飞指令已发送）")
                 } else {
                     onLogMessage?.invoke("❌ 启动巡航失败")
+                }
+            }
+            // ── 设置模式 ACK ─────────────────────────────────
+            DroneCommProtocol.CMD_SETTINGS_UPDATE -> {
+                if (success) {
+                    settingsState = SettingsState.UPDATED
+                    onSettingsStateChanged?.invoke(settingsState)
+                    onLogMessage?.invoke("✅ 配置已更新")
+                } else {
+                    onLogMessage?.invoke("❌ 配置更新失败")
                 }
             }
         }

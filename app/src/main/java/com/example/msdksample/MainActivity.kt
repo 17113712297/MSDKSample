@@ -129,6 +129,7 @@ private lateinit var landingController: LandingController
     private lateinit var btnModeMapping: Button
     private lateinit var btnModeCollect: Button
     private lateinit var btnModeCruise: Button
+    private lateinit var btnModeSettings: Button
     private lateinit var videoTransferManager: VideoTransferManager
     @Volatile private var currentTargetId = -1
     @Volatile private var previousLandingState: TaskState = TaskState.INACTIVE
@@ -285,6 +286,7 @@ private lateinit var landingController: LandingController
         btnModeMapping.setOnClickListener { showMappingDialog() }
         btnModeCollect.setOnClickListener { showCollectDialog() }
         btnModeCruise.setOnClickListener { showCruiseDialog() }
+        btnModeSettings.setOnClickListener { showSettingsDialog() }
         // ═══════════════════════════════════════════════════════
         // ★ 速度控制面板初始化
         // ═══════════════════════════════════════════════════════
@@ -658,6 +660,7 @@ private lateinit var landingController: LandingController
         btnModeMapping = findViewById(R.id.btnModeMapping)
         btnModeCollect = findViewById(R.id.btnModeCollect)
         btnModeCruise = findViewById(R.id.btnModeCruise)
+        btnModeSettings = findViewById(R.id.btnModeSettings)
 
         // ═══════════════════════════════════════════════════════
         // ★ 速度控制面板按钮绑定
@@ -1554,6 +1557,89 @@ private fun setupLiveStreamButton() {
 
         dialog.setOnDismissListener { }
 
+        dialog.show()
+    }
+
+    private fun showSettingsDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_settings, null)
+        val etServerIp = dialogView.findViewById<EditText>(R.id.etServerIp)
+        val etServerPort = dialogView.findViewById<EditText>(R.id.etServerPort)
+        val etRemoteCtrlIp = dialogView.findViewById<EditText>(R.id.etRemoteCtrlIp)
+        val etRemoteCtrlPort = dialogView.findViewById<EditText>(R.id.etRemoteCtrlPort)
+        val etFtpServerIp = dialogView.findViewById<EditText>(R.id.etFtpServerIp)
+        val etFtpServerPort = dialogView.findViewById<EditText>(R.id.etFtpServerPort)
+        val etLocalPort = dialogView.findViewById<EditText>(R.id.etLocalPort)
+        val btnClose = dialogView.findViewById<Button>(R.id.btnSettingsClose)
+        val tvStatus = dialogView.findViewById<TextView>(R.id.tvSettingsStatus)
+        val btnRefresh = dialogView.findViewById<Button>(R.id.btnSettingsRefresh)
+        val btnRestartHttp = dialogView.findViewById<Button>(R.id.btnSettingsRestartHttp)
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setCancelable(false)
+            .create()
+
+        fun setStatus(text: String, color: Int = 0xFFAAAAAA.toInt()) {
+            runOnUiThread {
+                tvStatus.text = text
+                tvStatus.setTextColor(color)
+            }
+        }
+
+        // 为每个配置项绑定保存按钮
+        fun setupSaveButton(btnId: Int, etId: EditText, key: String) {
+            dialogView.findViewById<Button>(btnId).setOnClickListener {
+                val value = etId.text.toString().trim()
+                if (value.isNotEmpty()) {
+                    modeController.settingsUpdate(key, value)
+                    setStatus("$key 已设为 $value", 0xFF4CAF50.toInt())
+                } else {
+                    setStatus("输入不能为空", 0xFFFF4444.toInt())
+                }
+            }
+        }
+
+        setupSaveButton(R.id.btnServerIp, etServerIp, "server_ip")
+        setupSaveButton(R.id.btnServerPort, etServerPort, "server_port")
+        setupSaveButton(R.id.btnRemoteCtrlIp, etRemoteCtrlIp, "remote_controller_ip")
+        setupSaveButton(R.id.btnRemoteCtrlPort, etRemoteCtrlPort, "remote_controller_port")
+        setupSaveButton(R.id.btnFtpServerIp, etFtpServerIp, "ftp_server_ip")
+        setupSaveButton(R.id.btnFtpServerPort, etFtpServerPort, "ftp_server_port")
+        setupSaveButton(R.id.btnLocalPort, etLocalPort, "local_port")
+
+        // 刷新按钮：从服务器读取当前配置，填入 EditText
+        btnRefresh.setOnClickListener {
+            setStatus("正在刷新...", 0xFFFF9800.toInt())
+            modeController.settingsGet()
+        }
+
+        // 配置回读回调：更新所有 EditText
+        modeController.onSettingsResponse = { config ->
+            runOnUiThread {
+                config["server_ip"]?.let { etServerIp.setText(it) }
+                config["server_port"]?.let { etServerPort.setText(it) }
+                config["remote_controller_ip"]?.let { etRemoteCtrlIp.setText(it) }
+                config["remote_controller_port"]?.let { etRemoteCtrlPort.setText(it) }
+                config["ftp_server_ip"]?.let { etFtpServerIp.setText(it) }
+                config["ftp_server_port"]?.let { etFtpServerPort.setText(it) }
+                config["local_port"]?.let { etLocalPort.setText(it) }
+                setStatus("✅ 配置已刷新", 0xFF4CAF50.toInt())
+            }
+        }
+
+        // 重启 HTTP 按钮
+        btnRestartHttp.setOnClickListener {
+            setStatus("正在重启 HTTP 服务...", 0xFFFF9800.toInt())
+            btnRestartHttp.isEnabled = false
+            modeController.settingsRestartHttp()
+            // 重启后 3 秒恢复按钮
+            Handler(Looper.getMainLooper()).postDelayed({
+                btnRestartHttp.isEnabled = true
+                setStatus("● 就绪", 0xFFAAAAAA.toInt())
+            }, 3000)
+        }
+
+        btnClose.setOnClickListener { dialog.dismiss() }
         dialog.show()
     }
 }
