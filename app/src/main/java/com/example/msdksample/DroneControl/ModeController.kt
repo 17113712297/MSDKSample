@@ -313,18 +313,28 @@ class ModeController {
     }
 
     fun onSettingsResponsePayload(payload: ByteArray) {
-        val jsonStr = String(payload, Charsets.UTF_8)
-        Log.i(TAG, "onSettingsResponsePayload: $jsonStr")
+        val raw = String(payload, Charsets.UTF_8)
+        Log.i(TAG, "onSettingsResponsePayload: $raw")
         try {
-            // 简单 JSON 解析（不用引入完整 JSON 库）
+            // 紧凑格式：a=val|b=val|c=val|d=val|e=val|f=val|g=val
+            // a=server_ip, b=server_port, c=remote_controller_ip,
+            // d=remote_controller_port, e=ftp_server_ip, f=ftp_server_port,
+            // g=local_port
             val config = mutableMapOf<String, String>()
-            val cleaned = jsonStr.trim().removeSurrounding("{", "}")
-            cleaned.split(",").forEach { pair ->
-                val parts = pair.split(":", limit = 2)
+            val keyMap = mapOf(
+                "a" to "server_ip",
+                "b" to "server_port",
+                "c" to "remote_controller_ip",
+                "d" to "remote_controller_port",
+                "e" to "ftp_server_ip",
+                "f" to "ftp_server_port",
+                "g" to "local_port",
+            )
+            raw.trim().split("|").forEach { pair ->
+                val parts = pair.split("=", limit = 2)
                 if (parts.size == 2) {
-                    val key = parts[0].trim().removeSurrounding("\"")
-                    val value = parts[1].trim().removeSurrounding("\"")
-                    config[key] = value
+                    val fullKey = keyMap[parts[0]] ?: parts[0]
+                    config[fullKey] = parts[1]
                 }
             }
             onSettingsResponse?.invoke(config)

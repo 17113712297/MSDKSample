@@ -10,17 +10,12 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" >
 
-        <Button
-            android:id="@+id/btnVelStartStop"
+        <View
             android:layout_width="match_parent"
-            android:layout_height="38dp"
-            android:backgroundTint="#4F5560"
-            android:padding="0dp"
-            android:text="启动"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp"
-            tools:layout_editor_absoluteX="15dp"
-            tools:layout_editor_absoluteY="414dp" />
+            android:layout_height="162dp"
+            android:layout_weight="1"
+            tools:layout_editor_absoluteX="316dp"
+            tools:layout_editor_absoluteY="524dp" />
     </dji.v5.ux.core.widget.fpv.FPVWidget>
 
     <LinearLayout
@@ -115,7 +110,7 @@
 
     <LinearLayout
         android:id="@+id/velocityControlLayout"
-        android:layout_width="wrap_content"
+        android:layout_width="124dp"
         android:layout_height="wrap_content"
         android:layout_alignParentStart="true"
         android:layout_alignParentBottom="true"
@@ -128,7 +123,7 @@
 
         <TextView
             android:id="@+id/txtVelTitle"
-            android:layout_width="match_parent"
+            android:layout_width="107dp"
             android:layout_height="wrap_content"
             android:gravity="center"
             android:paddingBottom="5dp"
@@ -137,72 +132,151 @@
             android:textSize="12sp" />
 
         <Button
+            android:id="@+id/btnVelStartStop"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
+            android:backgroundTint="#4F5560"
+            android:padding="0dp"
+            android:text="启动"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <Button
             android:id="@+id/btnVelZero"
             android:layout_width="match_parent"
             android:layout_height="38dp"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="5dp"
             android:backgroundTint="#4F5560"
             android:padding="0dp"
             android:text="速度归零"
             android:textColor="#FFFFFF"
             android:textSize="11sp" />
 
-        <View
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="6dp"
-            android:layout_marginBottom="5dp"
-            android:background="#1AFFFFFF" />
-
-        <LinearLayout
-            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="horizontal">
-            <Button android:id="@+id/btnVelYawMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#9B51E0" android:padding="0dp" android:text="Yaw-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelYawPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="5dp" android:backgroundTint="#9B51E0" android:padding="0dp"
-                android:text="Yaw+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelYawMinus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1"
+                android:backgroundTint="#9B51E0"
+                android:padding="0dp"
+                android:text="Yaw-"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelYawPlus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1"
+                android:backgroundTint="#9B51E0"
+                android:padding="0dp"
+                android:text="Yaw+"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="5dp"
             android:orientation="horizontal">
-            <Button android:id="@+id/btnVelXMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#2F80ED" android:padding="0dp" android:text="X-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelXPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="5dp" android:backgroundTint="#2F80ED" android:padding="0dp"
-                android:text="X+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelXMinus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1"
+                android:backgroundTint="#2F80ED"
+                android:padding="0dp"
+                android:text="X-"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelXPlus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1"
+                android:backgroundTint="#2F80ED"
+                android:padding="0dp"
+                android:text="X+"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="5dp"
             android:orientation="horizontal">
-            <Button android:id="@+id/btnVelYMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#27AE60" android:padding="0dp" android:text="Y-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelYPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="5dp" android:backgroundTint="#27AE60" android:padding="0dp"
-                android:text="Y+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelYMinus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1"
+                android:backgroundTint="#27AE60"
+                android:padding="0dp"
+                android:text="Y-"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelYPlus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1"
+                android:backgroundTint="#27AE60"
+                android:padding="0dp"
+                android:text="Y+"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="5dp"
             android:orientation="horizontal">
-            <Button android:id="@+id/btnVelZMinus" android:layout_width="44dp" android:layout_height="44dp"
-                android:backgroundTint="#F2994A" android:padding="0dp" android:text="Z-"
-                android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
-            <Button android:id="@+id/btnVelZPlus" android:layout_width="44dp" android:layout_height="44dp"
-                android:layout_marginStart="5dp" android:backgroundTint="#F2994A" android:padding="0dp"
-                android:text="Z+" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelZMinus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_weight="1"
+                android:backgroundTint="#F2994A"
+                android:padding="0dp"
+                android:text="Z-"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnVelZPlus"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginStart="5dp"
+                android:layout_weight="1"
+                android:backgroundTint="#F2994A"
+                android:padding="0dp"
+                android:text="Z+"
+                android:textColor="#FFFFFF"
+                android:textSize="9sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <TextView
@@ -266,7 +340,7 @@
             android:layout_marginTop="6dp"
             android:backgroundTint="#4F5560"
             android:padding="0dp"
-            android:text="设置"
+            android:text="HTTP设置"
             android:textColor="#FFFFFF"
             android:textSize="12sp" />
     </LinearLayout>
@@ -488,7 +562,7 @@
             android:layout_marginTop="10dp"
             android:background="#1AFFFFFF"
             android:fontFamily="monospace"
-            android:hint="rtmp://192.168.1.20:1935/live/obs1"
+            android:hint="rtmp://10.29.3.171:1935/live/obs1"
             android:imeOptions="actionDone"
             android:inputType="textUri"
             android:padding="10dp"

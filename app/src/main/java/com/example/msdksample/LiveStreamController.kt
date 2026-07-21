@@ -50,7 +50,7 @@ class LiveStreamController(private val context: Context) {
         private const val TAG = "LiveStreamController"
         private const val PREFS_NAME = "live_stream_prefs"
         private const val PREF_KEY_RTMP_URL = "rtmp_url"
-        private const val DEFAULT_RTMP_URL = "rtmp://192.168.1.20:1935/live/obs1"
+        private const val DEFAULT_RTMP_URL = "rtmp://10.29.3.171:1935/live/obs1"
         private const val MSG_NOT_CONNECTED = "Aircraft is not connected"
         private const val MSG_EMPTY_URL = "RTMP address is empty"
         private const val MSG_UNSUPPORTED_CODEC = "Unsupported video codec. Please switch the aircraft stream to H.264."
