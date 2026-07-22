@@ -51,17 +51,6 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <!-- 刷新按钮 -->
-            <Button
-                android:id="@+id/btnSettingsRefresh"
-                android:layout_width="match_parent"
-                android:layout_height="40dp"
-                android:backgroundTint="#2F80ED"
-                android:text="↻ 从服务器刷新配置"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold" />
-
             <!-- server_ip -->
             <LinearLayout
                 android:layout_width="match_parent"
@@ -326,19 +315,7 @@
                     android:textSize="11sp" />
             </LinearLayout>
 
-            <!-- 重启 HTTP 按钮 -->
-            <Button
-                android:id="@+id/btnSettingsRestartHttp"
-                android:layout_width="match_parent"
-                android:layout_height="40dp"
-                android:layout_marginTop="10dp"
-                android:backgroundTint="#F2994A"
-                android:text="重启 HTTP 服务"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold" />
-
-        </LinearLayout>
+            </LinearLayout>
     </ScrollView>
 
     <TextView

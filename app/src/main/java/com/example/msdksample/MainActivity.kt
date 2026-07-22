@@ -1571,8 +1571,6 @@ private fun setupLiveStreamButton() {
         val etLocalPort = dialogView.findViewById<EditText>(R.id.etLocalPort)
         val btnClose = dialogView.findViewById<Button>(R.id.btnSettingsClose)
         val tvStatus = dialogView.findViewById<TextView>(R.id.tvSettingsStatus)
-        val btnRefresh = dialogView.findViewById<Button>(R.id.btnSettingsRefresh)
-        val btnRestartHttp = dialogView.findViewById<Button>(R.id.btnSettingsRestartHttp)
 
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
@@ -1607,12 +1605,6 @@ private fun setupLiveStreamButton() {
         setupSaveButton(R.id.btnFtpServerPort, etFtpServerPort, "ftp_server_port")
         setupSaveButton(R.id.btnLocalPort, etLocalPort, "local_port")
 
-        // 刷新按钮：从服务器读取当前配置，填入 EditText
-        btnRefresh.setOnClickListener {
-            setStatus("正在刷新...", 0xFFFF9800.toInt())
-            modeController.settingsGet()
-        }
-
         // 配置回读回调：更新所有 EditText
         modeController.onSettingsResponse = { config ->
             runOnUiThread {
@@ -1625,18 +1617,6 @@ private fun setupLiveStreamButton() {
                 config["local_port"]?.let { etLocalPort.setText(it) }
                 setStatus("✅ 配置已刷新", 0xFF4CAF50.toInt())
             }
-        }
-
-        // 重启 HTTP 按钮
-        btnRestartHttp.setOnClickListener {
-            setStatus("正在重启 HTTP 服务...", 0xFFFF9800.toInt())
-            btnRestartHttp.isEnabled = false
-            modeController.settingsRestartHttp()
-            // 重启后 3 秒恢复按钮
-            Handler(Looper.getMainLooper()).postDelayed({
-                btnRestartHttp.isEnabled = true
-                setStatus("● 就绪", 0xFFAAAAAA.toInt())
-            }, 3000)
         }
 
         btnClose.setOnClickListener { dialog.dismiss() }
