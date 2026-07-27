@@ -2,6 +2,7 @@ package com.example.msdksample.transfer
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -62,6 +63,7 @@ class VideoTransferManager(
         private const val ENABLE_TIMEOUT_MS = 10_000L
         private const val DISABLE_TIMEOUT_MS = 5_000L
         private const val PULL_TIMEOUT_MS = 15_000L
+        private const val DELETE_TIMEOUT_MS = 30_000L
         private const val DOWNLOAD_TIMEOUT_MS = 10 * 60_000L
         private const val RECORD_SETTLE_MS = 45_000L
         private const val TRANSFER_GATE_POLL_MS = 1_000L
@@ -79,6 +81,16 @@ class VideoTransferManager(
         @Volatile private var sharedLastRecordStopEventTimeMs = 0L
         @Volatile private var sharedAwaitingCommandAfterStop = false
     }
+
+    private data class ExportedVideoTarget(
+        val uri: Uri? = null,
+        val file: File? = null
+    )
+
+    private data class SelectedVideoBatch(
+        val primary: MediaFile,
+        val relatedFiles: List<MediaFile>
+    )
 
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -221,12 +233,13 @@ class VideoTransferManager(
         enableMediaManager(mediaManager)
 
         try {
-            val mediaFile = pullLatestVideo(mediaManager) ?: run {
+            val videoBatch = pullLatestVideoBatch(mediaManager) ?: run {
                 Log.i(TAG, "No uploadable MP4 media file found on camera storage")
                 emitStatus("未在无人机 SD 卡中找到可上传视频")
                 return
             }
 
+            val mediaFile = videoBatch.primary
             val mediaId = buildMediaId(mediaFile)
             val uploadId = "$mediaId|${command.detectTimeCur}"
             if (uploadId == lastUploadedMediaId()) {
@@ -238,12 +251,14 @@ class VideoTransferManager(
             emitStatus("开始从无人机 SD 卡拉取: ${mediaFile.getFileName()}")
             val localFile = downloadMediaFile(mediaFile)
             val uploadFileName = buildUploadFileName(command)
-            val exportedToPublicDir = exportVideoToPublicDirectory(localFile, uploadFileName)
+            val exportedVideoTarget = exportVideoToPublicDirectory(localFile, uploadFileName)
             emitStatus("开始上传到前端: $uploadFileName")
             uploadVideoFile(host, localFile, uploadFileName)
             notifyVideoUploadCompleted(host, command)
             markUploaded(uploadId)
-            if (exportedToPublicDir) {
+            deleteCameraMediaFiles(mediaManager, videoBatch.relatedFiles)
+            if (exportedVideoTarget != null) {
+                deleteExportedVideo(exportedVideoTarget)
                 deleteLocalWorkingFile(localFile)
             } else {
                 Log.w(TAG, "Keeping local working file because public export did not complete: ${localFile.absolutePath}")
@@ -343,7 +358,7 @@ class VideoTransferManager(
         }
     }
 
-    private fun pullLatestVideo(mediaManager: IMediaManager): MediaFile? {
+    private fun pullLatestVideoBatch(mediaManager: IMediaManager): SelectedVideoBatch? {
         repeat(MAX_PULL_ATTEMPTS) { attempt ->
             emitStatus("正在读取无人机 SD 卡文件列表，第 ${attempt + 1} 次尝试")
             val allFiles = pullMediaFileList(mediaManager)
@@ -359,7 +374,10 @@ class VideoTransferManager(
             if (latestMp4 != null) {
                 Log.i(TAG, "Selected latest MP4: ${describeMediaFile(latestMp4)}")
                 emitStatus("已选中最新 MP4: ${latestMp4.getFileName()}")
-                return latestMp4
+                return SelectedVideoBatch(
+                    primary = latestMp4,
+                    relatedFiles = findRelatedVideoFiles(latestMp4, allFiles)
+                )
             }
 
             val latestVideoFallback = allFiles
@@ -371,7 +389,10 @@ class VideoTransferManager(
             if (latestVideoFallback != null) {
                 Log.w(TAG, "No MP4 found, fallback to latest video: ${describeMediaFile(latestVideoFallback)}")
                 emitStatus("未找到 MP4，回退为最新视频: ${latestVideoFallback.getFileName()}")
-                return latestVideoFallback
+                return SelectedVideoBatch(
+                    primary = latestVideoFallback,
+                    relatedFiles = findRelatedVideoFiles(latestVideoFallback, allFiles)
+                )
             }
 
             if (attempt + 1 < MAX_PULL_ATTEMPTS) {
@@ -540,17 +561,16 @@ class VideoTransferManager(
         emitStatus("前端上传成功")
     }
 
-    private fun exportVideoToPublicDirectory(localFile: File, publicFileName: String): Boolean {
+    private fun exportVideoToPublicDirectory(localFile: File, publicFileName: String): ExportedVideoTarget? {
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                exportVideoViaMediaStore(localFile, publicFileName)
+                ExportedVideoTarget(uri = exportVideoViaMediaStore(localFile, publicFileName))
             } else {
-                exportVideoViaLegacyPublicDirectory(localFile, publicFileName)
+                ExportedVideoTarget(file = exportVideoViaLegacyPublicDirectory(localFile, publicFileName))
             }
-            true
         }.onFailure { error ->
             Log.w(TAG, "Failed to export video to public directory: ${error.message}", error)
-        }.getOrDefault(false)
+        }.getOrNull()
     }
 
     private fun deleteLocalWorkingFile(localFile: File) {
@@ -563,6 +583,49 @@ class VideoTransferManager(
             }
         }.onFailure { error ->
             Log.w(TAG, "Failed to delete local working video: ${error.message}", error)
+        }
+    }
+
+    private fun deleteExportedVideo(exportedVideoTarget: ExportedVideoTarget) {
+        runCatching {
+            exportedVideoTarget.uri?.let { uri ->
+                val deletedCount = appContext.contentResolver.delete(uri, null, null)
+                if (deletedCount > 0) {
+                    Log.i(TAG, "Deleted exported public video from MediaStore: $uri")
+                    emitStatus("已自动删除遥控器里的已上传视频")
+                } else {
+                    Log.w(TAG, "Failed to delete exported public video from MediaStore: $uri")
+                }
+                return@runCatching
+            }
+
+            exportedVideoTarget.file?.let { file ->
+                if (file.exists() && file.delete()) {
+                    Log.i(TAG, "Deleted exported public video: ${file.absolutePath}")
+                    emitStatus("已自动删除遥控器里的已上传视频")
+                } else if (file.exists()) {
+                    Log.w(TAG, "Failed to delete exported public video: ${file.absolutePath}")
+                }
+            }
+        }.onFailure { error ->
+            Log.w(TAG, "Failed to delete exported public video: ${error.message}", error)
+        }
+    }
+
+    private fun deleteCameraMediaFiles(mediaManager: IMediaManager, mediaFiles: List<MediaFile>) {
+        if (mediaFiles.isEmpty()) {
+            return
+        }
+
+        runCatching {
+            Log.i(TAG, "Deleting ${mediaFiles.size} related camera video file(s)")
+            awaitCompletion("delete camera media files", DELETE_TIMEOUT_MS) { callback ->
+                mediaManager.deleteMediaFiles(mediaFiles, callback)
+            }
+            awaitMediaListUpToDate(mediaManager, DELETE_TIMEOUT_MS)
+            emitStatus("已自动删除无人机 SD 卡中的本次录像视频")
+        }.onFailure { error ->
+            Log.w(TAG, "Failed to delete camera media files: ${error.message}", error)
         }
     }
 
@@ -598,7 +661,7 @@ class VideoTransferManager(
         statusCallback?.invoke(message)
     }
 
-    private fun exportVideoViaMediaStore(localFile: File, publicFileName: String) {
+    private fun exportVideoViaMediaStore(localFile: File, publicFileName: String): Uri {
         val relativePath = "${Environment.DIRECTORY_MOVIES}/$PUBLIC_VIDEO_SUBDIR"
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, publicFileName)
@@ -620,6 +683,7 @@ class VideoTransferManager(
             values.put(MediaStore.MediaColumns.IS_PENDING, 0)
             resolver.update(uri, values, null, null)
             Log.i(TAG, "Exported video to public directory: $relativePath/$publicFileName")
+            return uri
         } catch (error: Exception) {
             runCatching { resolver.delete(uri, null, null) }
             throw error
@@ -627,7 +691,7 @@ class VideoTransferManager(
     }
 
     @Suppress("DEPRECATION")
-    private fun exportVideoViaLegacyPublicDirectory(localFile: File, publicFileName: String) {
+    private fun exportVideoViaLegacyPublicDirectory(localFile: File, publicFileName: String): File {
         val publicDir = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
             PUBLIC_VIDEO_SUBDIR
@@ -637,6 +701,7 @@ class VideoTransferManager(
             FileOutputStream(targetFile).use { output -> input.copyTo(output) }
         }
         Log.i(TAG, "Exported video to public directory: ${targetFile.absolutePath}")
+        return targetFile
     }
 
     private fun uniquePublicFile(publicDir: File, fileName: String): File {
@@ -677,6 +742,31 @@ class VideoTransferManager(
 
         errorRef.get()?.let { error ->
             throw IllegalStateException(error.description() ?: error.errorCode())
+        }
+    }
+
+    private fun awaitMediaListUpToDate(mediaManager: IMediaManager, timeoutMs: Long) {
+        if (mediaManager.mediaFileListState == MediaFileListState.UP_TO_DATE) {
+            return
+        }
+
+        val latch = CountDownLatch(1)
+        val listener = MediaFileListStateListener { state ->
+            if (state == MediaFileListState.UP_TO_DATE) {
+                latch.countDown()
+            }
+        }
+        mediaManager.addMediaFileListStateListener(listener)
+        try {
+            if (mediaManager.mediaFileListState == MediaFileListState.UP_TO_DATE) {
+                return
+            }
+            val updated = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!updated) {
+                throw IllegalStateException("Media file list did not return to UP_TO_DATE in time")
+            }
+        } finally {
+            mediaManager.removeMediaFileListStateListener(listener)
         }
     }
 
@@ -737,6 +827,32 @@ class VideoTransferManager(
     private fun isMp4MediaFile(mediaFile: MediaFile): Boolean {
         val fileName = mediaFile.getFileName()
         return mediaFile.getFileType() == MediaFileType.MP4 || fileName.endsWith(".mp4", ignoreCase = true)
+    }
+
+    private fun findRelatedVideoFiles(primary: MediaFile, allFiles: List<MediaFile>): List<MediaFile> {
+        val primaryBaseName = recordingBaseName(primary.getFileName())
+        val related = allFiles
+            .asSequence()
+            .filter(::isDownloadableMediaFile)
+            .filter(::isMp4MediaFile)
+            .filter { candidate ->
+                primaryBaseName.isNotBlank() &&
+                    primaryBaseName == recordingBaseName(candidate.getFileName())
+            }
+            .distinctBy { buildMediaId(it) }
+            .sortedWith(mediaSortComparator())
+            .toList()
+
+        Log.i(
+            TAG,
+            "Selected related camera video files for deletion: ${related.joinToString { it.getFileName() }}"
+        )
+        return related
+    }
+
+    private fun recordingBaseName(fileName: String): String {
+        val baseName = fileName.substringBeforeLast('.', fileName)
+        return baseName.replace(Regex("(?i)_[VST]$"), "")
     }
 
     private fun mediaSortComparator(): Comparator<MediaFile> {
