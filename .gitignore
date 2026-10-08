@@ -17,3 +17,8 @@
 # Claude Code local config
 CLAUDE.md
 obs_low_latency/diagnostics/
+
+# 本地打包产物与 IDE 运行配置
+/app/src/main/java/com/example/msdksample.zip
+/.run/
+/.idea/deviceManager.xml

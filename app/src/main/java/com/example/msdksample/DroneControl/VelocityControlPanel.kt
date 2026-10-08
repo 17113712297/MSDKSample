@@ -580,8 +580,8 @@ class VelocityControlPanel {
         if (modeName in BLOCKED_MODES) return false
         // 在白名单 → 允许
         if (modeName in ALLOWED_MODES) return true
-        // 未知模式 → 宽松放行（避免因固件枚举变化永久锁定）
-        Log.w(TAG, "未知飞行模式: $modeName，暂按允许处理")
-        return true
+        // 未知模式禁止接管，避免切档后继续发送旧速度。
+        Log.w(TAG, "未知飞行模式: $modeName，禁止接管")
+        return false
     }
 }

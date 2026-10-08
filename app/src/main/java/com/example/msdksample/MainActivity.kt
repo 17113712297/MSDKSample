@@ -271,6 +271,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        if (::landingController.isInitialized) landingController.stopMission("界面退出前台，中止视觉降落")
         pollHandler.removeCallbacks(pollRunnable)
         pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
         compositeDisposable?.dispose()
@@ -382,6 +383,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupControllerCallbacks() {
+        landingController.onLandingSucceed = {
+            DroneControlService.sendFrame(DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_ACK_LAND_COMPLETE))
+        }
         landingController.onTaskStateChanged = { state ->
             runOnUiThread {
                 when (state) {
@@ -411,14 +415,8 @@ class MainActivity : AppCompatActivity() {
             }
             if (state == TaskState.INACTIVE && previousLandingState == TaskState.LANDING) {
                 previousLandingState = TaskState.INACTIVE
-                // ★ 降落完成后关闭视频流
+                // 退出或中止后关闭视觉流；仅确认落地才发送完成通知。
                 DroneControlService.onStopCameraStream?.invoke()
-                runCatching {
-                    val frame = DroneCommProtocol.encodeSimple(
-                        DroneCommProtocol.CMD_ACK_LAND_COMPLETE
-                    )
-                    DroneControlService.sendFrame(frame)
-                }
             }
         }
 
@@ -499,9 +497,13 @@ class MainActivity : AppCompatActivity() {
             testCameraController = CameraController(currentCameraIndex)
             visionController = VisionController()
 
-            visionController?.onTargetLocked = { id, errX, errY, depthZ, yawDeg ->
+            visionController?.onTargetLocked = { id, errX, errY, depthZ, yawDeg, timestamp ->
                 currentTargetId = id
-                landingController.updateVisionData(id, errX, errY, depthZ, yawDeg)
+                landingController.updateVisionData(id, errX, errY, depthZ, yawDeg, timestamp)
+            }
+            visionController?.onTargetLost = {
+                currentTargetId = -1
+                landingController.invalidateVisionData()
             }
 
             testCameraController?.frameCallback = { data, offset, length, width, height ->
