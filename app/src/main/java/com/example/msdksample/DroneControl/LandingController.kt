@@ -15,6 +15,7 @@ import dji.sdk.keyvalue.value.camera.CameraVideoStreamSourceType
 import dji.sdk.keyvalue.value.common.Velocity3D
 import dji.sdk.keyvalue.value.flightcontroller.FlightCoordinateSystem
 import dji.sdk.keyvalue.value.flightcontroller.FlightMode
+import dji.sdk.keyvalue.value.flightcontroller.FlightControlAuthorityChangeReason
 import dji.sdk.keyvalue.value.flightcontroller.RollPitchControlMode
 import dji.sdk.keyvalue.value.flightcontroller.VerticalControlMode
 import dji.sdk.keyvalue.value.flightcontroller.VirtualStickFlightControlParam
@@ -26,6 +27,8 @@ import dji.v5.common.callback.CommonCallbacks
 import dji.v5.common.error.IDJIError
 import dji.v5.manager.KeyManager
 import dji.v5.manager.aircraft.virtualstick.VirtualStickManager
+import dji.v5.manager.aircraft.virtualstick.VirtualStickState
+import dji.v5.manager.aircraft.virtualstick.VirtualStickStateListener
 import java.util.Timer
 import java.util.TimerTask
 import java.util.concurrent.atomic.AtomicReference
@@ -165,6 +168,30 @@ class LandingController {
     @Volatile private var missionGeneration = 0
     @Volatile private var stopping = false
     @Volatile private var enablePending = false
+    private var stopStickConfirmed = false
+    private var stopLandingConfirmed = false
+    private var stopDisablePending = false
+    private var stopDisableAgain = false
+    private var stopCancelPending = false
+    private var stopStartedMs = 0L
+    private var observedStickEnabled: Boolean? = null
+    private var observedStickAtMs = 0L
+    private val stickStateListener = object : VirtualStickStateListener {
+        override fun onVirtualStickStateUpdate(stickState: VirtualStickState) {
+            synchronized(this@LandingController) {
+                observedStickEnabled = stickState.isVirtualStickEnable
+                observedStickAtMs = SystemClock.elapsedRealtime()
+                if (stopping) {
+                    stopStickConfirmed = !stickState.isVirtualStickEnable
+                    refreshStopCompletion()
+                }
+            }
+        }
+
+        override fun onChangeReasonUpdate(reason: FlightControlAuthorityChangeReason) {
+            Log.i(TAG, "控制权变化原因: $reason")
+        }
+    }
 
     private var lastUiYawDeg  = Double.NaN
     private var lastUiYawTime = 0L
@@ -213,6 +240,8 @@ class LandingController {
         runCatching {
             KeyManager.getInstance().listen(KeyTools.createKey(FlightControllerKey.KeyFlightMode), this, flightModeListener)
         }
+        runCatching { VirtualStickManager.getInstance().setVirtualStickStateListener(stickStateListener) }
+            .onFailure { Log.w(TAG, "无法监听虚拟摇杆状态，释放恢复仅依赖接口应答", it) }
     }
 
     // =========================================================================
@@ -232,7 +261,27 @@ class LandingController {
 
     @Synchronized
     fun startVisionLanding() {
-        if (stopping || enablePending || taskStateRef.get() != TaskState.INACTIVE) return
+        if (stopping) {
+            refreshStopCompletion()
+            if (stopping) {
+                val km = KeyManager.getInstance()
+                val mode = km.getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name.orEmpty()
+                if (km.getValue(KeyTools.createKey(FlightControllerKey.KeyConnection)) != true || !isNormalFlightMode(mode)) {
+                    onError?.invoke("上次中止尚未确认释放，请保持连接并切回 N 挡后再次点击")
+                } else if (enablePending || stopDisablePending || stopCancelPending) {
+                    onError?.invoke("仍在等待控制权操作应答，暂不能重新降落；请保持人工控制")
+                } else {
+                    onMessage?.invoke("正在重新确认释放控制权，完成后请再次点击降落")
+                    requestStopRelease(missionGeneration)
+                }
+                return
+            }
+        }
+        if (enablePending) {
+            onError?.invoke("正在等待控制权接管应答，请勿重复启动")
+            return
+        }
+        if (taskStateRef.get() != TaskState.INACTIVE) return
         if (DroneControlService.isVelocityPanelActive) {
             onError?.invoke("请先停止手动速度控制，再启动视觉降落")
             return
@@ -274,14 +323,19 @@ class LandingController {
                 rotateGimbal(-90.0)
 
                 enablePending = true
+                observedStickEnabled = null
+                observedStickAtMs = 0L
                 VirtualStickManager.getInstance().enableVirtualStick(object : CommonCallbacks.CompletionCallback {
                     override fun onSuccess() {
+                        synchronized(this@LandingController) {
                         enablePending = false
                         if (generation != missionGeneration || taskStateRef.get() != TaskState.LANDING_PREP) {
-                            VirtualStickManager.getInstance().disableVirtualStick(object : CommonCallbacks.CompletionCallback {
-                                override fun onSuccess() = Unit
-                                override fun onFailure(error: IDJIError) { Log.e(TAG, "取消接管失败: ${error.description()}") }
-                            })
+                            // 被中止的接管请求晚到：先清除旧释放证据，再关闭，不能让新任务抢先启动。
+                            stopStickConfirmed = false
+                            observedStickEnabled = null
+                            observedStickAtMs = 0L
+                            stopDisableAgain = true
+                            requestStopRelease(missionGeneration)
                             return
                         }
                         VirtualStickManager.getInstance().setVirtualStickAdvancedModeEnabled(true)
@@ -294,12 +348,16 @@ class LandingController {
                         controlHandler.removeCallbacks(flightControlRunnable)
                         controlHandler.post(flightControlRunnable)
                         Log.i(TAG, "✅ 虚拟摇杆已开启, SEARCHING 开始")
+                        }
                     }
 
                     override fun onFailure(error: IDJIError) {
+                        synchronized(this@LandingController) {
                         enablePending = false
                         if (generation == missionGeneration)
                             dispatchError("🛑 接管被拒: [${error.errorCode()}] ${error.description()}")
+                        else refreshStopCompletion()
+                        }
                     }
                 })
             } catch (e: Exception) {
@@ -315,11 +373,13 @@ class LandingController {
         val prev = taskStateRef.getAndSet(TaskState.INACTIVE)
         if (prev == TaskState.INACTIVE) return
         stopping = true
+        stopStartedMs = SystemClock.elapsedRealtime()
         val wasFinalLanding = isFinalPhase()
-        val stopRequests = java.util.concurrent.atomic.AtomicInteger(if (wasFinalLanding && !completed) 2 else 1)
-        fun stopRequestSucceeded() {
-            if (stopRequests.decrementAndGet() == 0) stopping = false
-        }
+        stopStickConfirmed = false
+        stopLandingConfirmed = !wasFinalLanding || completed
+        stopDisablePending = false
+        stopDisableAgain = false
+        stopCancelPending = false
         missionGeneration++
         // 先切断后续喂帧，再请求零速度，最后释放 SDK 控制权。
         controlHandler.removeCallbacks(flightControlRunnable)
@@ -339,37 +399,104 @@ class LandingController {
         onMessage?.invoke("🔴 已退出: $reason")
 
         controlHandler.removeCallbacks(flightControlRunnable)
-        if (wasFinalLanding && !completed) {
+        requestStopRelease(missionGeneration)
+    }
+
+    /** 只能根据成功应答或近期 SDK 状态解除中止锁；切回 N 挡本身不是释放证据。 */
+    @Synchronized
+    private fun refreshStopCompletion() {
+        if (!stopping || enablePending || stopDisablePending || stopCancelPending) return
+        if (stopDisableAgain) {
+            requestStopRelease(missionGeneration)
+            return
+        }
+        val km = KeyManager.getInstance()
+        if (runCatching { km.getValue(KeyTools.createKey(FlightControllerKey.KeyConnection)) }.getOrNull() != true) {
+            stopStickConfirmed = false
+            observedStickEnabled = null
+            observedStickAtMs = 0L
+            return
+        }
+        if (observedStickAtMs >= stopStartedMs && SystemClock.elapsedRealtime() - observedStickAtMs <= 2000L &&
+            observedStickEnabled == false) stopStickConfirmed = true
+        if (!stopLandingConfirmed &&
+            runCatching { km.getValue(KeyTools.createKey(FlightControllerKey.KeyIsInLandingMode)) }.getOrNull() == false) {
+            stopLandingConfirmed = true
+        }
+        if (stopStickConfirmed && stopLandingConfirmed) {
+            stopping = false
+            onMessage?.invoke("已确认控制权释放；切回 N 挡后可手动重新发起降落")
+        }
+    }
+
+    @Synchronized
+    private fun requestStopRelease(generation: Int) {
+        if (!stopping || generation != missionGeneration || stopDisablePending || stopCancelPending) return
+        // 先标记全部请求，防止同步回调提前解锁。旧任务回调不得改变新任务的锁。
+        stopDisablePending = true
+        stopDisableAgain = false
+        stopCancelPending = !stopLandingConfirmed
+        if (stopCancelPending) {
             runCatching {
                 KeyManager.getInstance().performAction(KeyTools.createKey(FlightControllerKey.KeyStopAutoLanding), null,
                     object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
                         override fun onSuccess(value: EmptyMsg?) {
-                            stopRequestSucceeded()
-                            Log.i(TAG, "已请求取消自动降落")
+                            synchronized(this@LandingController) {
+                                if (generation != missionGeneration) return
+                                stopCancelPending = false
+                                stopLandingConfirmed = true
+                                refreshStopCompletion()
+                            }
                         }
                         override fun onFailure(error: IDJIError) {
-                            onError?.invoke("取消自动降落失败，请立即使用遥控器接管: ${error.description()}")
+                            synchronized(this@LandingController) {
+                                if (generation != missionGeneration) return
+                                stopCancelPending = false
+                                Log.w(TAG, "取消自动降落失败: ${error.description()}")
+                                refreshStopCompletion()
+                                if (stopping) onError?.invoke("取消降落未确认，请人工接管；回 N 挡后可点击降落重试释放")
+                            }
                         }
                     })
-            }.onFailure { onError?.invoke("无法取消自动降落，请使用遥控器接管") }
+            }.onFailure {
+                stopCancelPending = false
+                onError?.invoke("无法取消自动降落，请使用遥控器接管")
+            }
         }
-        if (prev == TaskState.LANDING || prev == TaskState.LANDING_PREP) {
+        // 高级模式设置失败不能阻止后续关闭虚拟摇杆请求。
+        runCatching { VirtualStickManager.getInstance().setVirtualStickAdvancedModeEnabled(false) }
+            .onFailure { Log.w(TAG, "关闭高级模式异常，仍尝试释放虚拟摇杆", it) }
             runCatching {
-                VirtualStickManager.getInstance().setVirtualStickAdvancedModeEnabled(false)
                 VirtualStickManager.getInstance().disableVirtualStick(object : CommonCallbacks.CompletionCallback {
-                    override fun onSuccess() { stopRequestSucceeded(); Log.i(TAG, "✅ 虚拟摇杆已关闭") }
+                    override fun onSuccess() {
+                        synchronized(this@LandingController) {
+                            if (generation != missionGeneration) return
+                            stopDisablePending = false
+                            stopStickConfirmed = true
+                            refreshStopCompletion()
+                        }
+                    }
                     override fun onFailure(error: IDJIError) {
-                        Log.e(TAG, "摇杆释放失败: ${error.description()}")
-                        onError?.invoke("控制权释放失败，已锁定自动重启，请使用遥控器接管")
+                        synchronized(this@LandingController) {
+                            if (generation != missionGeneration) return
+                            stopDisablePending = false
+                            Log.w(TAG, "摇杆释放接口失败: [${error.errorCode()}] ${error.description()}")
+                            refreshStopCompletion()
+                            if (stopping) onError?.invoke("控制权释放尚未确认，请人工接管；回 N 挡后可点击降落重试释放")
+                        }
                     }
                 })
-            }.onFailure { onError?.invoke("控制权释放异常，已锁定自动重启，请使用遥控器接管") }
-        }
+            }.onFailure {
+                stopDisablePending = false
+                refreshStopCompletion()
+                if (stopping) onError?.invoke("控制权释放异常，请人工接管；回 N 挡后可点击降落重试释放")
+            }
     }
 
     fun release() {
         stopMission("Controller Released")
         runCatching { KeyManager.getInstance().cancelListen(KeyTools.createKey(FlightControllerKey.KeyFlightMode), this) }
+        runCatching { VirtualStickManager.getInstance().removeVirtualStickStateListener(stickStateListener) }
         controlHandler.removeCallbacksAndMessages(null)
         controlThread.quitSafely()
     }
