@@ -53,6 +53,9 @@ class DroneControlService : Service() {
         @Volatile
         var onResetVisionTracking: (() -> Unit)? = null
 
+        @Volatile
+        var onPrepareVisualLanding: (() -> Unit)? = null
+
         // ⭐【速度面板协调标志】：VelocityControlPanel 激活时置 true，
         //   用于拦截 CMD_VEL 防止与本端手动速度控制冲突
         @Volatile
@@ -108,6 +111,7 @@ class DroneControlService : Service() {
     // ── 生命周期 ──────────────────────────────────────────
     override fun onCreate() {
         super.onCreate()
+        onPrepareVisualLanding = { droneCtrl.suspendVelocityFeed() }
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification())
         scheduleRegisterPayloadListener(immediate = true)
@@ -124,6 +128,7 @@ class DroneControlService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        onPrepareVisualLanding = null
         unregisterPayloadListener()
         droneCtrl.release()
         Log.i(TAG, "Service 已停止")
@@ -133,6 +138,21 @@ class DroneControlService : Service() {
 
     // ── 帧分发 ────────────────────────────────────────────
     private fun dispatchFrame(frame: DroneCommProtocol.ParsedFrame) {
+        val visualLandingActive = landingController?.getTaskState()?.let { it != TaskState.INACTIVE } == true
+        if (visualLandingActive && frame.cmd == DroneCommProtocol.CMD_HOVER) {
+            landingController?.stopMission("远端请求悬停，中止视觉降落")
+            // ACK 仅表示已接受中止请求，不伪造悬停完成通知。
+            sendAck(frame.cmd, DroneCommProtocol.ACK_OK)
+            return
+        }
+        if (visualLandingActive && frame.cmd in setOf(
+                DroneCommProtocol.CMD_TAKEOFF, DroneCommProtocol.CMD_LAND,
+                DroneCommProtocol.CMD_VEL, DroneCommProtocol.CMD_GIMBAL_YAW_FOLLOW,
+                DroneCommProtocol.CMD_GIMBAL_ANGLE, DroneCommProtocol.CMD_CAM_ZOOM,
+                DroneCommProtocol.CMD_VISION_LANDING)) {
+            sendAck(frame.cmd, DroneCommProtocol.ACK_FAIL)
+            return
+        }
         when (frame.cmd) {
 
             // ── 飞控 ────────────────────────────────────────
@@ -307,7 +327,7 @@ class DroneControlService : Service() {
             DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF -> {
                 Log.i(TAG, "来自 Jetson: 起飞前检查")
                 val ctrl = preflightController
-                if (ctrl != null) {
+                if (ctrl != null && !isVelocityPanelActive) {
                     onResetVisionTracking?.invoke() // 自检前也同步清理历史缓存
                     onStartCameraStream?.invoke()
                     mainHandler.post { ctrl.startCheck() }
@@ -322,7 +342,7 @@ class DroneControlService : Service() {
             DroneCommProtocol.CMD_VISION_LANDING -> {
                 Log.i(TAG, "来自 Jetson: 视觉降落")
                 val ctrl = landingController
-                if (ctrl != null) {
+                if (ctrl != null && DualMarkerLandingConfig.landingError() == null && !isVelocityPanelActive) {
                     // 先在当前 Binder 线程立即触发重置，消除主线程排队带来的时序滞后风险
                     onResetVisionTracking?.invoke()
                     onStartCameraStream?.invoke()

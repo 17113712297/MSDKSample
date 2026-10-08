@@ -1,286 +1,161 @@
 package com.example.msdksample
 
+import android.os.SystemClock
 import android.util.Log
 import org.opencv.calib3d.Calib3d
-import org.opencv.core.Core
-import org.opencv.core.CvType
-import org.opencv.core.Mat
-import org.opencv.core.MatOfDouble
-import org.opencv.core.MatOfPoint2f
-import org.opencv.core.MatOfPoint3f
-import org.opencv.core.Point3
+import org.opencv.core.*
 import org.opencv.objdetect.ArucoDetector
 import org.opencv.objdetect.DetectorParameters
 import org.opencv.objdetect.Objdetect
-import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.sqrt
-import kotlin.math.tan
+import kotlin.math.*
 
+/** 两码必须同时可见；八个角点联合求解以两码中点为原点的板位姿。 */
 class VisionController {
-
     companion object {
         const val TAG = "VisionTest"
-        const val HFOV_DEG = 70.3
-        const val FILTER_ALPHA = 0.35
-        const val MIN_VALID_DEPTH_M     = 0.05
-        const val MAX_VALID_DEPTH_M     = 30.0
-        const val MAX_VALID_LATERAL_M   = 8.0
-        const val MAX_DEPTH_JUMP_RATIO  = 0.6
-        const val MIN_TAG_PIXEL_AREA  = 400.0
-        const val MAX_TAG_AREA_RATIO  = 0.55
-        const val OPTIMAL_AREA_MIN    = 1500.0
-        const val OPTIMAL_AREA_MAX    = 25000.0
-        const val EDGE_MARGIN_PX      = 5
-        const val LOG_INTERVAL_MS = 500L
-
-        // ★ 从 MainActivity 移入：目标ID黏性 - 锁定ID丢失多久才允许切换
-        const val STICKY_LOSE_TIMEOUT_MS = 2_000L
+        // 相机参数集中配置；变焦/镜头/裁剪改变后须重新标定。
+        const val HFOV_DEG = DualMarkerLandingConfig.WIDE_CAMERA_HORIZONTAL_FOV_DEG
+        private const val RESET_AFTER_MS = 200L
     }
-
-    private val dictionary = Objdetect.getPredefinedDictionary(Objdetect.DICT_6X6_250)
-    private val detectorParams = DetectorParameters()
-    private val detector      = ArucoDetector(dictionary, detectorParams)
-
-    private var grayMat: Mat? = null
-    private val corners       = ArrayList<Mat>()
-    private val ids           = Mat()
-    private val rejected      = ArrayList<Mat>()
-
+    private val config = DualMarkerLandingConfig
+    private var detector: ArucoDetector? = null
+    private var gray: Mat? = null
     private var cameraMatrix: Mat? = null
-    private val distCoeffs    = MatOfDouble(0.0, 0.0, 0.0, 0.0, 0.0)
-    private val rvec          = Mat()
-    private val tvec          = Mat()
-    private val rmat          = Mat()
+    private val distortion = MatOfDouble(0.0, 0.0, 0.0, 0.0, 0.0)
+    private val ids = Mat()
+    private val detected = ArrayList<Mat>()
+    private val rejected = ArrayList<Mat>()
+    private var lastAcceptedMs = 0L
+    private var fx = 0.0
+    private var fy = 0.0
+    private var fz = 0.0
+    private var yaw = 0.0
+    private var lastLogMs = 0L
 
-    private var cachedObjPoints: MatOfPoint3f? = null
-    private var cachedObjSize  = -1.0
+    // frontId 表示整块板的有效性，不表示只使用了前码。
+    var onTargetLocked: ((Int, Double, Double, Double, Double, Long) -> Unit)? = null
+    var onTargetLost: (() -> Unit)? = null
 
-    private var filterInited  = false
-    private var fErrX         = 0.0
-    private var fErrY         = 0.0
-    private var fYaw          = 0.0
-    private var lastDepth     = 0.0
-    private var lastTargetId  = -1
-
-    // ★ 从 MainActivity 移入：黏性锁定状态
-    @Volatile private var stickyTargetId      = -1
-    @Volatile private var lastStickyMatchTime = 0L
-
-    var onTargetLocked: ((id: Int, errX: Double, errY: Double, depthZ: Double, yawDeg: Double) -> Unit)? = null
-
-    // ─── 物理参数定义 ───
-    private fun getTagPhysicalSize(id: Int): Double = when (id) {
-        1, 2, 3, 4             -> 0.180  // 大码 18cm
-        5, 6, 7, 8             -> 0.073  // 中码 7.3cm
-        10, 12, 13, 14, 15, 16 -> 0.036  // 小码 3.6cm
-        else                   -> -1.0
+    private fun clear(items: ArrayList<Mat>) {
+        items.forEach { it.release() }
+        items.clear()
     }
-
-    // ★ 关键：定义每个 Tag 相对降落板正中心的物理偏移 (单位:米)
-    private fun getTagOffset(id: Int): Pair<Double, Double> {
-        return when (id) {
-            14 -> Pair(-0.036, 0.0)  //左方
-            15 -> Pair(0.036, 0.0)  //右方
-            13 -> Pair(0.05, 0.0)   //右方
-            12 -> Pair(-0.05, 0.0)  // 左方
-            16 -> Pair(0.0, -0.073)  //下方
-            10 -> Pair(0.0, 0.073)  //上方
-            5 -> Pair(0.0, 0.18)  // 上方
-            7 -> Pair(0.0, -0.18)   // 下方
-            2 -> Pair(0.15, 0.15) // 右上
-            4 -> Pair(0.15, -0.15)  // 右下
-            3 -> Pair(-0.15, -0.15)   // 左下
-            1 -> Pair(-0.15, 0.15)   // 左上
-            else -> Pair(0.0, 0.0)
+    private fun reject(reason: String) {
+        onTargetLost?.invoke()
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastLogMs > 1000L) {
+            Log.d(TAG, reason)
+            lastLogMs = now
         }
     }
+    private fun wrap(degrees: Double): Double = ((degrees + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
 
-    // ★ 从 MainActivity 移入：获取目标优先级
-    private fun getTargetPriority(id: Int): Int {
-        return when (id) {
-            14, 15     -> 5  // 第一优先级：最靠近中心的小码，主导最后几厘米的微调
-            10, 16     -> 4  // 第二优先级：上下小码
-            12, 13     -> 3  // 第三优先级：左右偏外侧小码
-            5, 6, 7, 8 -> 2  // 第四优先级：中码阵列
-            1, 2, 3, 4 -> 1  // 第五优先级：大码阵列，主导高空捕捉
-            else       -> 0
-        }
+    private fun imageCorners(index: Int, width: Int, height: Int): List<Point>? {
+        val values = FloatArray(8)
+        detected[index].get(0, 0, values)
+        val points = (0..3).map { Point(values[it * 2].toDouble(), values[it * 2 + 1].toDouble()) }
+        if (points.any { !it.x.isFinite() || !it.y.isFinite() || it.x < 5 || it.y < 5 || it.x > width - 5 || it.y > height - 5 }) return null
+        val area = abs(points.indices.sumOf { i ->
+            val p = points[i]; val q = points[(i + 1) % 4]
+            p.x * q.y - q.x * p.y
+        }) / 2.0
+        return points.takeIf { area >= 400.0 }
     }
 
-    private fun ensureCameraMatrix(width: Int, height: Int) {
-        val focal = width.toDouble() / (2.0 * tan(Math.toRadians(HFOV_DEG / 2.0)))
-        cameraMatrix?.release()
-        cameraMatrix = Mat(3, 3, CvType.CV_64F).apply {
-            put(0, 0, focal, 0.0, width / 2.0, 0.0, focal, height / 2.0, 0.0, 0.0, 1.0)
-        }
-    }
-
-    private fun releaseAndClear(list: ArrayList<Mat>) {
-        for (m in list) m.release()
-        list.clear()
-    }
-
-    private fun cornerArea(c: Mat): Double {
-        val p = FloatArray(8)
-        c.get(0, 0, p)
-        return 0.5 * abs((p[0]*p[3]-p[2]*p[1]) + (p[2]*p[5]-p[4]*p[3]) + (p[4]*p[7]-p[6]*p[5]) + (p[6]*p[1]-p[0]*p[7]))
-    }
-
-    private fun isFullyInside(c: Mat, width: Int, height: Int): Boolean {
-        val p = FloatArray(8)
-        c.get(0, 0, p)
-        val m = EDGE_MARGIN_PX.toFloat()
-        for (i in 0 until 4) if (p[i*2] < m || p[i*2] > width - m || p[i*2+1] < m || p[i*2+1] > height - m) return false
-        return true
-    }
-
-    private fun pickBestTagIndex(idArr: IntArray, cs: List<Mat>, w: Int, h: Int): Int {
-        val areaCap = w.toDouble() * h * MAX_TAG_AREA_RATIO
-        var bestIdx = -1
-        var bestScore = -1.0
-        for (i in idArr.indices) {
-            val tagId = idArr[i]
-            if (getTagPhysicalSize(tagId) <= 0.0 || !isFullyInside(cs[i], w, h)) continue
-            val a = cornerArea(cs[i])
-            if (a < MIN_TAG_PIXEL_AREA || a > areaCap) continue
-
-            // 智能加权：越靠近中心的码优先级越高
-            val (ox, oy) = getTagOffset(tagId)
-            val score = if (a in OPTIMAL_AREA_MIN..OPTIMAL_AREA_MAX) a else a * 0.4
-            val priority = (1.0 / (1.0 + sqrt(ox * ox + oy * oy))) * 1000.0
-            if (score + priority > bestScore) {
-                bestScore = score + priority
-                bestIdx = i
-            }
-        }
-        return bestIdx
-    }
-
-    private fun extractYawDeg(rmat: Mat): Double {
-        return Math.toDegrees(atan2(rmat.get(0, 1)[0], -rmat.get(1, 1)[0]))
-    }
-
-    private fun filterYaw(current: Double, target: Double, alpha: Double): Double {
-        var d = target - current
-        if (d > 180.0) d -= 360.0 else if (d < -180.0) d += 360.0
-        var next = current + alpha * d
-        return if (next > 180.0) next - 360.0 else if (next < -180.0) next + 360.0 else next
-    }
-
-    // ★ 从 MainActivity 移入：目标 ID 黏性过滤逻辑
-    private fun applyStickyTargetFilter(id: Int, errX: Double, errY: Double, depthZ: Double, yawDeg: Double) {
-        val now = System.currentTimeMillis()
-        val currentPriority = getTargetPriority(stickyTargetId)
-        val newPriority = getTargetPriority(id)
-
-        // 1. 绝对抢占机制
-        if (newPriority > currentPriority && stickyTargetId != -1) {
-            Log.w(TAG, "🎯 发现更高精度码(ID:$id 优先级:$newPriority)！抛弃原码(ID:$stickyTargetId)，强制抢占！")
-            stickyTargetId = id
-            lastStickyMatchTime = now
-            onTargetLocked?.invoke(id, errX, errY, depthZ, yawDeg)
-            return
-        }
-
-        // 2. 同级或低优先级时的常规黏性逻辑
-        when {
-            stickyTargetId == -1 -> {
-                // 第一次锁定
-                stickyTargetId = id
-                lastStickyMatchTime = now
-                onTargetLocked?.invoke(id, errX, errY, depthZ, yawDeg)
-                Log.i(TAG, "🔒 首次锁定目标 ID:$id (优先级:$newPriority)")
-            }
-            id == stickyTargetId -> {
-                // 仍是锁定的 ID,正常刷新
-                lastStickyMatchTime = now
-                onTargetLocked?.invoke(id, errX, errY, depthZ, yawDeg)
-            }
-            now - lastStickyMatchTime > STICKY_LOSE_TIMEOUT_MS -> {
-                // 当前锁定的码丢失太久，允许降级或切换到视野内的其他码
-                Log.w(TAG, "🔀 锁定 ID:$stickyTargetId 已丢 ${now - lastStickyMatchTime}ms → 降级切到 ID:$id")
-                stickyTargetId = id
-                lastStickyMatchTime = now
-                onTargetLocked?.invoke(id, errX, errY, depthZ, yawDeg)
-            }
-            else -> {
-                // 锁定 ID 还在保护期内，且新看到的码优先级不高于当前码，忽略该帧以防震荡
-            }
-        }
-    }
-
+    @Synchronized
     fun processFrame(data: ByteArray, offset: Int, length: Int, width: Int, height: Int) {
+        val frameTime = SystemClock.elapsedRealtime()
+        config.visionError()?.let { reject(it); return }
+        if (width <= 0 || height <= 0 || offset < 0 || length < width.toLong() * height ||
+            offset.toLong() + width.toLong() * height > data.size) {
+            reject("无效 Y 平面缓冲区"); return
+        }
+        val objectPoints = MatOfPoint3f()
+        val imagePoints = MatOfPoint2f()
+        val projected = MatOfPoint2f()
+        val rvec = Mat()
+        val tvec = Mat()
+        val rotation = Mat()
         try {
-            if (grayMat == null || grayMat!!.cols() != width || grayMat!!.rows() != height) {
-                grayMat?.release()
-                grayMat = Mat(height, width, CvType.CV_8UC1)
-                ensureCameraMatrix(width, height)
-            }
-            grayMat!!.put(0, 0, data, offset, width * height)
-
-            releaseAndClear(corners); releaseAndClear(rejected)
-            detector.detectMarkers(grayMat, corners, ids, rejected)
-            if (ids.empty()) return
-
-            val idArr = IntArray(ids.rows())
-            ids.get(0, 0, idArr)
-            val bestIdx = pickBestTagIndex(idArr, corners, width, height)
-            if (bestIdx < 0) return
-
-            val targetId = idArr[bestIdx]
-            val tagSize = getTagPhysicalSize(targetId)
-
-            if (abs(cachedObjSize - tagSize) > 1e-6) {
-                val h = tagSize / 2.0
-                cachedObjPoints?.release()
-                cachedObjPoints = MatOfPoint3f(Point3(-h, h, 0.0), Point3(h, h, 0.0), Point3(h, -h, 0.0), Point3(-h, -h, 0.0))
-                cachedObjSize = tagSize
-            }
-
-            val pts = FloatArray(8); corners[bestIdx].get(0, 0, pts)
-            val imgPts2f = MatOfPoint2f(org.opencv.core.Point(pts[0].toDouble(), pts[1].toDouble()), org.opencv.core.Point(pts[2].toDouble(), pts[3].toDouble()), org.opencv.core.Point(pts[4].toDouble(), pts[5].toDouble()), org.opencv.core.Point(pts[6].toDouble(), pts[7].toDouble()))
-
-            Calib3d.solvePnP(cachedObjPoints, imgPts2f, cameraMatrix, distCoeffs, rvec, tvec)
-            Calib3d.Rodrigues(rvec, rmat)
-
-            val (ox, oy) = getTagOffset(targetId)
-            val padCenterInTag = Mat(3, 1, CvType.CV_64F).apply { put(0, 0, -ox); put(1, 0, -oy); put(2, 0, 0.0) }
-            val padCenterInCam = Mat()
-            Core.gemm(rmat, padCenterInTag, 1.0, tvec, 1.0, padCenterInCam)
-
-            val tx = padCenterInCam.get(0, 0)[0]; val ty = padCenterInCam.get(1, 0)[0]; val tz = padCenterInCam.get(2, 0)[0]
-
-            if (tz in MIN_VALID_DEPTH_M..MAX_VALID_DEPTH_M) {
-                if (!filterInited || targetId != lastTargetId) {
-                    fErrX = tx; fErrY = ty; fYaw = extractYawDeg(rmat); filterInited = true
-                } else {
-                    fErrX = FILTER_ALPHA * tx + (1 - FILTER_ALPHA) * fErrX
-                    fErrY = FILTER_ALPHA * ty + (1 - FILTER_ALPHA) * fErrY
-                    fYaw  = filterYaw(fYaw, extractYawDeg(rmat), FILTER_ALPHA)
+            if (detector == null) {
+                val dictionary = Objdetect.getPredefinedDictionary(config.dictionaryId!!)
+                val bytes = dictionary.get_bytesList()
+                val count = try { bytes.rows() } finally { bytes.release() }
+                if (config.frontId!! >= count || config.rearId!! >= count) {
+                    reject("标记 ID 超出所选字典范围"); return
                 }
-                lastTargetId = targetId
-
-                // ★ 修改点：不再直接抛出结果，而是先经过黏性过滤
-                applyStickyTargetFilter(targetId, fErrX, fErrY, tz, fYaw)
+                detector = ArucoDetector(dictionary, DetectorParameters())
             }
-
-            padCenterInTag.release(); padCenterInCam.release(); imgPts2f.release()
-        } catch (e: Exception) { Log.e(TAG, "Process error", e) }
+            if (gray?.cols() != width || gray?.rows() != height) {
+                gray?.release(); cameraMatrix?.release()
+                gray = Mat(height, width, CvType.CV_8UC1)
+                val focal = width / (2.0 * tan(Math.toRadians(HFOV_DEG / 2.0)))
+                cameraMatrix = Mat(3, 3, CvType.CV_64F).apply {
+                    put(0, 0, focal, 0.0, width / 2.0, 0.0, focal, height / 2.0, 0.0, 0.0, 1.0)
+                }
+                resetTracking()
+            }
+            gray!!.put(0, 0, data, offset, width * height)
+            clear(detected); clear(rejected)
+            detector!!.detectMarkers(gray, detected, ids, rejected)
+            if (ids.empty()) { reject("两码不可见"); return }
+            val found = IntArray(ids.rows())
+            ids.get(0, 0, found)
+            val front = found.indices.filter { found[it] == config.frontId }
+            val rear = found.indices.filter { found[it] == config.rearId }
+            if (front.size != 1 || rear.size != 1) { reject("需要两个唯一的配置标记同时可见"); return }
+            val frontPixels = imageCorners(front.single(), width, height)
+            val rearPixels = imageCorners(rear.single(), width, height)
+            if (frontPixels == null || rearPixels == null) { reject("码过小或角点出界"); return }
+            val halfDistance = config.centerDistanceM!! / 2.0
+            val model = config.corners(config.frontSizeM!!, halfDistance, config.frontRotationDeg!!) +
+                config.corners(config.rearSizeM!!, -halfDistance, config.rearRotationDeg!!)
+            objectPoints.fromList(model.map { Point3(it.x, it.y, it.z) })
+            val pixels = frontPixels + rearPixels
+            imagePoints.fromList(pixels)
+            if (!Calib3d.solvePnP(objectPoints, imagePoints, cameraMatrix, distortion, rvec, tvec,
+                    false, Calib3d.SOLVEPNP_ITERATIVE)) { reject("双码位姿求解失败"); return }
+            Calib3d.Rodrigues(rvec, rotation)
+            val x = tvec.get(0, 0)[0]; val y = tvec.get(1, 0)[0]; val z = tvec.get(2, 0)[0]
+            val heading = Math.toDegrees(atan2(rotation.get(0, 1)[0], -rotation.get(1, 1)[0]))
+            // R 的第 3 列为板面法向；法向距离消除光轴倾斜导致的高度混用。
+            val boardDistance = abs(rotation.get(0, 2)[0] * x + rotation.get(1, 2)[0] * y + rotation.get(2, 2)[0] * z)
+            if (!x.isFinite() || !y.isFinite() || !z.isFinite() || !heading.isFinite() || !boardDistance.isFinite() || boardDistance <= 0.05 ||
+                z !in 0.05..30.0 || hypot(x, y) > 8.0 || model.any {
+                    rotation.get(2, 0)[0] * it.x + rotation.get(2, 1)[0] * it.y + z <= 0.0
+                }) { reject("双码位姿越界"); return }
+            Calib3d.projectPoints(objectPoints, rvec, tvec, cameraMatrix, distortion, projected)
+            val reprojection = projected.toArray()
+            val errors = pixels.indices.map { hypot(pixels[it].x - reprojection[it].x, pixels[it].y - reprojection[it].y) }
+            if (errors.any { !it.isFinite() } || errors.maxOrNull()!! > config.MAX_REPROJECTION_ERROR_PX) {
+                reject("双码重投影误差过大，请检查尺寸/朝向/相机标定"); return
+            }
+            if (SystemClock.elapsedRealtime() - frameTime > RESET_AFTER_MS) { reject("视觉处理延迟过大"); return }
+            val recent = lastAcceptedMs > 0L && frameTime - lastAcceptedMs <= RESET_AFTER_MS
+            if (recent && (sqrt((x-fx).pow(2) + (y-fy).pow(2) + (boardDistance-fz).pow(2)) > config.MAX_POSITION_JUMP_M ||
+                    abs(wrap(heading-yaw)) > config.MAX_YAW_JUMP_DEG)) { reject("双码位姿跳变"); return }
+            val alpha = if (recent) 0.35 else 1.0
+            fx += alpha * (x - fx); fy += alpha * (y - fy); fz += alpha * (boardDistance - fz)
+            yaw = wrap(yaw + alpha * wrap(heading - yaw))
+            lastAcceptedMs = frameTime
+            onTargetLocked?.invoke(config.frontId!!, fx, fy, fz, yaw, frameTime)
+        } catch (error: Exception) {
+            reject("双码处理异常: " + error.message)
+            Log.e(TAG, "双码处理异常", error)
+        } finally {
+            objectPoints.release(); imagePoints.release(); projected.release()
+            rvec.release(); tvec.release(); rotation.release()
+        }
     }
 
-    // ★ 新增：供外部调用，在每次中止降落/重新开始降落时，清空黏性状态
-    fun resetTracking() {
-        stickyTargetId = -1
-        lastStickyMatchTime = 0L
-        filterInited = false
-        lastTargetId = -1
-    }
+    @Synchronized
+    fun resetTracking() { lastAcceptedMs = 0L }
 
+    @Synchronized
     fun release() {
-        grayMat?.release(); ids.release(); rvec.release(); tvec.release(); rmat.release()
-        cameraMatrix?.release(); distCoeffs.release(); cachedObjPoints?.release()
-        releaseAndClear(corners); releaseAndClear(rejected)
+        gray?.release(); gray = null
+        cameraMatrix?.release(); cameraMatrix = null
+        distortion.release(); ids.release(); clear(detected); clear(rejected)
         resetTracking()
     }
 }

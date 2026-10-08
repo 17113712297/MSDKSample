@@ -379,6 +379,13 @@ class DroneController {
         vx: Float, vy: Float, vz: Float, yawRate: Float,
         onResult: (Boolean, String) -> Unit
     ) {
+        val mode = KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name
+        if (mode !in setOf("NORMAL", "GPS_NORMAL", "POSITION_CTRL", "JOYSTICK", "VIRTUAL_STICK") ||
+            DroneControlService.landingController?.getTaskState()?.let { it != TaskState.INACTIVE } == true) {
+            onResult(false, "N mode required and visual landing must be inactive")
+            return
+        }
+        val generation = velocityGeneration.get()
         // 0. 起飞进行中硬拦截：自动起飞和 VirtualStick 在飞控里互斥，
         //    起飞未完成就 enable VirtualStick 很可能直接失败，或打断起飞序列。
         //    Jetson 应订阅 /drone/notify/takeoff_complete 确认起飞完成后再发 VEL。
@@ -408,6 +415,11 @@ class DroneController {
         // 2. 必要时启用 VirtualStick
         if (!virtualStickEnabled.get()) {
             enableVirtualStick { ok, msg ->
+                if (generation != velocityGeneration.get()) {
+                    virtualStickEnabled.set(false)
+                    onResult(false, "velocity request superseded by visual landing")
+                    return@enableVirtualStick
+                }
                 if (ok) {
                     startFeedTimer()
                     onResult(true, "OK")
@@ -417,6 +429,20 @@ class DroneController {
             }
         } else {
             onResult(true, "OK")
+        }
+    }
+
+    private val velocityGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** 交还发送权，不在此关闭视觉控制器共享的 VirtualStick。 */
+    fun suspendVelocityFeed() {
+        velocityGeneration.incrementAndGet()
+        synchronized(feedLock) {
+            feedFuture?.cancel(false)
+            feedFuture = null
+            cmdRef.set(VelCmd())
+            lastVelCmdTimeMs = 0L
+            virtualStickEnabled.set(false)
         }
     }
 
@@ -493,6 +519,10 @@ class DroneController {
             if (feedFuture != null) return
             feedFuture = feedExecutor.scheduleAtFixedRate({
                 if (!virtualStickEnabled.get()) return@scheduleAtFixedRate
+                if (DroneControlService.landingController?.getTaskState()?.let { it != TaskState.INACTIVE } == true) {
+                    suspendVelocityFeed()
+                    return@scheduleAtFixedRate
+                }
                 try {
                     // 看门狗检查：超过 VEL_WATCHDOG_MS 没喂狗 → 悬停
                     val last = lastVelCmdTimeMs

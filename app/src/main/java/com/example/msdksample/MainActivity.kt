@@ -8,20 +8,14 @@ import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.example.msdksample.devicereport.DeviceStatusReportManager
-import com.example.msdksample.transfer.VideoTransferManager
-import dji.sdk.keyvalue.key.DJIKey
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.key.KeyTools
@@ -57,9 +51,6 @@ class MainActivity : AppCompatActivity() {
         const val POLL_INTERVAL = 500L
         const val AUTO_STREAM_RETRY_DELAY_MS = 3_000L
         const val AUTO_STREAM_MAX_ATTEMPTS = 10
-        const val VISUAL_LAND_CONFIRM_POLL_MS = 500L
-        const val VISUAL_LAND_CONFIRM_TIMEOUT_MS = 20_000L
-        const val VISUAL_LAND_GROUNDED_POLLS_REQUIRED = 2
     }
 
     private lateinit var fpvWidget: FPVWidget
@@ -121,16 +112,8 @@ class MainActivity : AppCompatActivity() {
     private var visionController: VisionController? = null
     private lateinit var liveStreamController: LiveStreamController
     private lateinit var deviceStatusReportManager: DeviceStatusReportManager
-private lateinit var landingController: LandingController
+    private lateinit var landingController: LandingController
     private lateinit var preflightController: PreflightController
-
-    // ★ 新模式控制器
-    private lateinit var modeController: ModeController
-    private lateinit var btnModeMapping: Button
-    private lateinit var btnModeCollect: Button
-    private lateinit var btnModeCruise: Button
-    private lateinit var btnModeSettings: Button
-    private lateinit var videoTransferManager: VideoTransferManager
     @Volatile private var currentTargetId = -1
     @Volatile private var previousLandingState: TaskState = TaskState.INACTIVE
 
@@ -139,12 +122,8 @@ private lateinit var landingController: LandingController
     private var autoStreamStopped = false
     private var liveStreamTouchedByUser = false
     private var isLiveStreamPanelVisible = false
-    private var recordingMonitorKey: DJIKey<Boolean>? = null
-    private var lastRecordingState: Boolean? = null
-    @Volatile private var awaitingVisualLandConfirmation = false
 
     private val pollHandler = Handler(Looper.getMainLooper())
-    private val visualLandingHandler = Handler(Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
         override fun run() {
             pollVelocity()
@@ -175,7 +154,6 @@ private lateinit var landingController: LandingController
                         liveStreamController.updateLiveStreamCameraSource(source)
                         liveStreamController.refreshConfiguredStreamAddress()
                     }
-                    registerRecordingStateListener()
                     if (::landingController.isInitialized) {
                         landingController.currentCameraIndex = source
                     }
@@ -204,20 +182,6 @@ private lateinit var landingController: LandingController
             deviceStatusReportManager = DeviceStatusReportManager {
                 liveStreamController.getConfiguredStreamAddress()
             }
-            videoTransferManager = VideoTransferManager(
-                context = applicationContext,
-                streamAddressProvider = { liveStreamController.getConfiguredStreamAddress() },
-                cameraIndexProvider = { currentCameraIndex }
-            )
-            // statusCallback 未使用，保持 null
-            videoTransferManager.onTransferFinished = { success, summary ->
-                val reason = if (success) {
-                    "media transfer finished: $summary"
-                } else {
-                    "media transfer failed: $summary"
-                }
-                liveStreamController.recoverAfterMediaTransfer(reason)
-            }
             setupLiveStreamController()
             deviceStatusReportManager.start()
             landingController = LandingController()
@@ -225,25 +189,8 @@ private lateinit var landingController: LandingController
             setupControllerCallbacks()
             DroneControlService.preflightController = preflightController
             DroneControlService.landingController = landingController
-            // ★ 注入相机流启停闭包（供 DroneControlService 在 PSDK 触发时调用）
-            DroneControlService.onStartCameraStream = {
-                runOnUiThread {
-                    ensureVisionSystemReady()
-                    visionController?.resetTracking()
-                    testCameraController?.startVideoStream()
-                }
-            }
-            DroneControlService.onResetVisionTracking = {
-                visionController?.resetTracking()
-            }
-            DroneControlService.onStopCameraStream = {
-                runCatching { testCameraController?.stopVideoStream() }
-            }
-            // ★ 初始化模式控制器
-            modeController = ModeController()
-            DroneControlService.modeController = modeController
-            setupModeController()
 
+            // ★ 注入相机流启停闭包（供 DroneControlService 在 PSDK 触发时调用）
             DroneControlService.onStartCameraStream = {
                 runOnUiThread {
                     ensureVisionSystemReady()
@@ -282,11 +229,6 @@ private lateinit var landingController: LandingController
         btnAutoLanding?.setOnClickListener { onLandingClicked() }
         btnTakeoff?.setOnClickListener { onTakeoffClicked() }
 
-        // ★ 模式按钮点击
-        btnModeMapping.setOnClickListener { showMappingDialog() }
-        btnModeCollect.setOnClickListener { showCollectDialog() }
-        btnModeCruise.setOnClickListener { showCruiseDialog() }
-        btnModeSettings.setOnClickListener { showSettingsDialog() }
         // ═══════════════════════════════════════════════════════
         // ★ 速度控制面板初始化
         // ═══════════════════════════════════════════════════════
@@ -296,7 +238,6 @@ private lateinit var landingController: LandingController
         runCatching {
             ContextCompat.startForegroundService(this, Intent(this, DroneControlService::class.java))
         }
-        VideoUploadCommandService.start(this)
     }
 
     override fun onResume() {
@@ -307,7 +248,6 @@ private lateinit var landingController: LandingController
             liveStreamController.refreshConfiguredStreamAddress()
             scheduleAutoStartLiveStream()
         }
-        registerRecordingStateListener()
 
         compositeDisposable = CompositeDisposable()
         compositeDisposable?.add(
@@ -331,16 +271,19 @@ private lateinit var landingController: LandingController
 
     override fun onPause() {
         super.onPause()
+        if (::landingController.isInitialized) landingController.stopMission("界面退出前台，中止视觉降落")
         pollHandler.removeCallbacks(pollRunnable)
         pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
         compositeDisposable?.dispose()
         compositeDisposable = null
+        if (::liveStreamController.isInitialized && liveStreamController.isStreaming()) {
+            liveStreamController.stopStreamIfNeeded()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
-        visualLandingHandler.removeCallbacksAndMessages(null)
         MediaDataCenter.getInstance()
             .getCameraStreamManager()
             .removeAvailableCameraUpdatedListener(availableCameraUpdatedListener)
@@ -351,15 +294,6 @@ private lateinit var landingController: LandingController
         if (::deviceStatusReportManager.isInitialized) {
             deviceStatusReportManager.stop()
         }
-        unregisterRecordingStateListener()
-        if (::videoTransferManager.isInitialized) {
-            videoTransferManager.statusCallback = null
-            videoTransferManager.release()
-        }
-        DroneControlService.onEnqueueLatestVideoTransfer = null
-        DroneControlService.onStartCameraStream = null
-        DroneControlService.onStopCameraStream = null
-        DroneControlService.onResetVisionTracking = null
         if (::landingController.isInitialized) landingController.release()
         if (::preflightController.isInitialized) preflightController.release()
         visionController?.release()
@@ -449,6 +383,9 @@ private lateinit var landingController: LandingController
     }
 
     private fun setupControllerCallbacks() {
+        landingController.onLandingSucceed = {
+            DroneControlService.sendFrame(DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_ACK_LAND_COMPLETE))
+        }
         landingController.onTaskStateChanged = { state ->
             runOnUiThread {
                 when (state) {
@@ -478,6 +415,7 @@ private lateinit var landingController: LandingController
             }
             if (state == TaskState.INACTIVE && previousLandingState == TaskState.LANDING) {
                 previousLandingState = TaskState.INACTIVE
+                // 退出或中止后关闭视觉流；仅确认落地才发送完成通知。
                 DroneControlService.onStopCameraStream?.invoke()
             }
         }
@@ -486,9 +424,6 @@ private lateinit var landingController: LandingController
             runOnUiThread { showErrorOnUI(msg) }
         }
         landingController.onMessage = { msg ->
-            if (isVisualLandingSuccessMessage(msg)) {
-                awaitVisualLandingConfirmation()
-            }
             runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
         }
 
@@ -510,6 +445,7 @@ private lateinit var landingController: LandingController
                 yawRateText.textSize = 14f
                 Toast.makeText(this, "安全检查通过", Toast.LENGTH_LONG).show()
             }
+            // ★ 自检结束后关闭视频流
             DroneControlService.onStopCameraStream?.invoke()
             runCatching {
                 val frame = DroneCommProtocol.encodeSimple(
@@ -525,6 +461,7 @@ private lateinit var landingController: LandingController
                 btnTakeoff?.text = "重新检查"
                 showErrorOnUI(reason)
             }
+            // ★ 自检结束后关闭视频流
             DroneControlService.onStopCameraStream?.invoke()
             runCatching {
                 val reasonCode: Byte = when {
@@ -560,9 +497,13 @@ private lateinit var landingController: LandingController
             testCameraController = CameraController(currentCameraIndex)
             visionController = VisionController()
 
-            visionController?.onTargetLocked = { id, errX, errY, depthZ, yawDeg ->
+            visionController?.onTargetLocked = { id, errX, errY, depthZ, yawDeg, timestamp ->
                 currentTargetId = id
-                landingController.updateVisionData(id, errX, errY, depthZ, yawDeg)
+                landingController.updateVisionData(id, errX, errY, depthZ, yawDeg, timestamp)
+            }
+            visionController?.onTargetLost = {
+                currentTargetId = -1
+                landingController.invalidateVisionData()
             }
 
             testCameraController?.frameCallback = { data, offset, length, width, height ->
@@ -655,12 +596,6 @@ private lateinit var landingController: LandingController
 
         btnAutoLanding = findViewById(R.id.btnAutoLanding)
         btnTakeoff = findViewById(R.id.btnTakeoff)
-
-        // ★ 模式按钮
-        btnModeMapping = findViewById(R.id.btnModeMapping)
-        btnModeCollect = findViewById(R.id.btnModeCollect)
-        btnModeCruise = findViewById(R.id.btnModeCruise)
-        btnModeSettings = findViewById(R.id.btnModeSettings)
 
         // ═══════════════════════════════════════════════════════
         // ★ 速度控制面板按钮绑定
@@ -813,7 +748,7 @@ private lateinit var landingController: LandingController
         yawRateText.text = "0.0"
     }
 
-private fun reattachStatusWidgets() {
+    private fun reattachStatusWidgets() {
         Log.d(TAG_SDK, "重新挂载顶栏 Widget...")
         listOf(
             R.id.systemStatusWidget,
@@ -857,92 +792,7 @@ private fun reattachStatusWidgets() {
         liveStreamAddressInput.setText(liveStreamController.getConfiguredStreamAddress())
     }
 
-private fun registerRecordingStateListener() {
-        unregisterRecordingStateListener()
-        val key = KeyTools.createKey(CameraKey.KeyIsRecording, currentCameraIndex)
-        recordingMonitorKey = key
-        lastRecordingState = KeyManager.getInstance().getValue(key)
-        Log.i(TAG, "Register recording listener on camera index=$currentCameraIndex initial=$lastRecordingState")
-        runCatching {
-            KeyManager.getInstance().listen(key, this, true) { oldValue, newValue ->
-                val current = newValue ?: oldValue ?: false
-                val previous = lastRecordingState
-                Log.d(TAG, "Recording state update old=$oldValue new=$newValue previous=$previous current=$current")
-                if (previous == true && current == false && ::videoTransferManager.isInitialized) {
-                    Log.i(TAG, "Recording transitioned to stopped, enqueue latest video transfer")
-                    videoTransferManager.enqueueLatestVideoTransferAfterRecordStop()
-                }
-                lastRecordingState = current
-            }
-        }.onFailure {
-            Log.w(TAG, "Failed to register recording listener: ${it.message}")
-        }
-    }
-
-    private fun unregisterRecordingStateListener() {
-        val key = recordingMonitorKey ?: return
-        Log.i(TAG, "Unregister recording listener")
-        runCatching { KeyManager.getInstance().cancelListen(key, this) }
-        recordingMonitorKey = null
-        lastRecordingState = null
-    }
-
-    private fun isVisualLandingSuccessMessage(message: String): Boolean {
-        return message.contains("自动直降完成") || message.contains("强制停桨完成")
-    }
-
-    private fun awaitVisualLandingConfirmation() {
-        if (awaitingVisualLandConfirmation) {
-            Log.i(TAG, "Visual landing confirmation is already in progress")
-            return
-        }
-
-        awaitingVisualLandConfirmation = true
-        val startTimeMs = System.currentTimeMillis()
-        var groundedPollCount = 0
-
-        val poll = object : Runnable {
-            override fun run() {
-                val isFlying = runCatching {
-                    KeyManager.getInstance().getValue(
-                        KeyTools.createKey(FlightControllerKey.KeyIsFlying)
-                    ) ?: false
-                }.getOrDefault(true)
-
-                groundedPollCount = if (!isFlying) groundedPollCount + 1 else 0
-
-                if (groundedPollCount >= VISUAL_LAND_GROUNDED_POLLS_REQUIRED) {
-                    awaitingVisualLandConfirmation = false
-                    Log.i(TAG, "Visual landing confirmed by KeyIsFlying=false")
-                    handleVisualLandingConfirmed()
-                    return
-                }
-
-                if (System.currentTimeMillis() - startTimeMs >= VISUAL_LAND_CONFIRM_TIMEOUT_MS) {
-                    awaitingVisualLandConfirmation = false
-                    val msg = "视觉降落任务已结束，但未确认无人机已落地，未发送完成通知"
-                    Log.w(TAG, msg)
-                    runOnUiThread { showErrorOnUI(msg) }
-                    return
-                }
-
-                visualLandingHandler.postDelayed(this, VISUAL_LAND_CONFIRM_POLL_MS)
-            }
-        }
-
-        visualLandingHandler.post(poll)
-    }
-
-    private fun handleVisualLandingConfirmed() {
-        runCatching {
-            val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_ACK_LAND_COMPLETE)
-            DroneControlService.sendFrame(frame)
-        }.onFailure {
-            Log.w(TAG, "Failed to send visual landing completion ACK: ${it.message}")
-        }
-    }
-
-private fun setupLiveStreamButton() {
+    private fun setupLiveStreamButton() {
         btnLiveStreamPanel.setOnClickListener {
             toggleLiveStreamPanel()
         }
@@ -1170,456 +1020,5 @@ private fun setupLiveStreamButton() {
         CameraVideoStreamSourceType.ZOOM_CAMERA -> DroneCommProtocol.CAM_LENS_ZOOM
         CameraVideoStreamSourceType.INFRARED_CAMERA -> DroneCommProtocol.CAM_LENS_INFRARED
         else -> DroneCommProtocol.CAM_LENS_WIDE
-    }
-
-    // ═══════════════════════════════════════════════════════
-    // ★ 模式控制
-    // ═══════════════════════════════════════════════════════
-
-    private fun setupModeController() {
-        modeController.onMappingStateChanged = { state ->
-            runOnUiThread {
-                when (state) {
-                    ModeController.MappingState.IDLE -> Log.i(TAG, "建图状态: 空闲")
-                    ModeController.MappingState.RUNNING -> Log.i(TAG, "建图状态: 运行中")
-                    ModeController.MappingState.SAVED -> Log.i(TAG, "建图状态: 已保存")
-                    else -> {}
-                }
-            }
-        }
-
-        modeController.onCollectStateChanged = { state ->
-            runOnUiThread {
-                when (state) {
-                    ModeController.CollectState.IDLE -> Log.i(TAG, "采点状态: 空闲")
-                    ModeController.CollectState.RUNNING -> Log.i(TAG, "采点状态: 采点中")
-                    ModeController.CollectState.MAP_2D_DONE -> Log.i(TAG, "采点状态: 2D已生成")
-                    ModeController.CollectState.PIXEL_DONE -> Log.i(TAG, "采点状态: 像素已生成")
-                    else -> {}
-                }
-            }
-        }
-
-        modeController.onCruiseStateChanged = { state ->
-            runOnUiThread {
-                when (state) {
-                    ModeController.CruiseState.IDLE -> Log.i(TAG, "巡航状态: 空闲")
-                    ModeController.CruiseState.MAP_SET -> Log.i(TAG, "巡航状态: 地图已设置")
-                    ModeController.CruiseState.WP_SET -> Log.i(TAG, "巡航状态: 航线已设置")
-                    ModeController.CruiseState.READY -> Log.i(TAG, "巡航状态: 已起飞")
-                    else -> {}
-                }
-            }
-        }
-
-        modeController.onLogMessage = { msg ->
-            runOnUiThread {
-                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun showMappingDialog() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_mapping, null)
-        val etMapName = dialogView.findViewById<EditText>(R.id.etMappingMapName)
-        val btnStart = dialogView.findViewById<Button>(R.id.btnMappingStart)
-        val btnSave = dialogView.findViewById<Button>(R.id.btnMappingSave)
-        val btnStop = dialogView.findViewById<Button>(R.id.btnMappingStop)
-        val btnClose = dialogView.findViewById<Button>(R.id.btnMappingClose)
-        val tvStatus = dialogView.findViewById<TextView>(R.id.tvMappingStatus)
-
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .setCancelable(false)
-            .create()
-
-        // 状态更新
-        val updateUi = { state: ModeController.MappingState ->
-            runOnUiThread {
-                when (state) {
-                    ModeController.MappingState.IDLE -> {
-                        btnStart.isEnabled = true
-                        btnSave.isEnabled = false
-                        btnStop.isEnabled = false
-                        tvStatus.text = "● 就绪"
-                        tvStatus.setTextColor(0xFFAAAAAA.toInt())
-                    }
-                    ModeController.MappingState.RUNNING -> {
-                        btnStart.isEnabled = false
-                        btnSave.isEnabled = true
-                        btnStop.isEnabled = true
-                        tvStatus.text = "● 建图中..."
-                        tvStatus.setTextColor(0xFF4CAF50.toInt())
-                    }
-                    ModeController.MappingState.SAVED -> {
-                        btnStart.isEnabled = false
-                        btnSave.isEnabled = true
-                        btnStop.isEnabled = true
-                        tvStatus.text = "● 已保存"
-                        tvStatus.setTextColor(0xFF1976D2.toInt())
-                    }
-                    else -> {}
-                }
-            }
-        }
-
-        // 监听状态变更
-        modeController.onMappingStateChanged = { state ->
-            updateUi(state)
-        }
-
-        // 初始状态
-        updateUi(modeController.mappingState)
-
-        btnStart.setOnClickListener {
-            val name = etMapName.text.toString().trim()
-            if (name.isNotEmpty()) {
-                modeController.mappingSetName(name)
-            }
-            modeController.mappingStart()
-        }
-
-        btnSave.setOnClickListener {
-            val name = etMapName.text.toString().trim()
-            modeController.mappingSaveMap(name)
-        }
-
-        btnStop.setOnClickListener {
-            modeController.mappingStop()
-            updateUi(ModeController.MappingState.IDLE)
-        }
-
-        btnClose.setOnClickListener {
-            dialog.dismiss()
-        }
-
-        dialog.setOnDismissListener {
-            // 恢复全局回调
-            modeController.onMappingStateChanged = { state ->
-                runOnUiThread {
-                    when (state) {
-                        ModeController.MappingState.IDLE -> Log.i(TAG, "建图状态: 空闲")
-                        ModeController.MappingState.RUNNING -> Log.i(TAG, "建图状态: 运行中")
-                        ModeController.MappingState.SAVED -> Log.i(TAG, "建图状态: 已保存")
-                        else -> {}
-                    }
-                }
-            }
-        }
-
-        dialog.show()
-    }
-
-    private fun showCollectDialog() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_collect, null)
-        val spMap = dialogView.findViewById<Spinner>(R.id.spCollectMap)
-        val etWpName = dialogView.findViewById<EditText>(R.id.etCollectWpName)
-        val btnRefreshMap = dialogView.findViewById<Button>(R.id.btnCollectRefreshMap)
-        val btnApplyMap = dialogView.findViewById<Button>(R.id.btnCollectApplyMap)
-        val btnApplyWpName = dialogView.findViewById<Button>(R.id.btnCollectApplyWpName)
-        val btnStart = dialogView.findViewById<Button>(R.id.btnCollectStart)
-        val btnRecord = dialogView.findViewById<Button>(R.id.btnCollectRecord)
-        val btnSave = dialogView.findViewById<Button>(R.id.btnCollectSave)
-        val btnGen2D = dialogView.findViewById<Button>(R.id.btnCollectGen2D)
-        val btnGenPixel = dialogView.findViewById<Button>(R.id.btnCollectGenPixel)
-        val btnStop = dialogView.findViewById<Button>(R.id.btnCollectStop)
-        val btnClose = dialogView.findViewById<Button>(R.id.btnCollectClose)
-        val tvStatus = dialogView.findViewById<TextView>(R.id.tvCollectStatus)
-
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .setCancelable(false)
-            .create()
-
-        val waypointCtrl = WaypointController()
-
-        // 地图 Spinner 适配器
-        val mapAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf<String>()).apply {
-            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        }
-        spMap.adapter = mapAdapter
-
-        // 状态更新回调
-        val updateUi = { state: ModeController.CollectState ->
-            runOnUiThread {
-                when (state) {
-                    ModeController.CollectState.IDLE -> {
-                        btnStart.isEnabled = true
-                        btnRecord.isEnabled = false
-                        btnSave.isEnabled = false
-                        btnGen2D.isEnabled = false
-                        btnGenPixel.isEnabled = false
-                        btnStop.isEnabled = false
-                        tvStatus.text = "● 就绪"
-                        tvStatus.setTextColor(0xFFAAAAAA.toInt())
-                    }
-                    ModeController.CollectState.RUNNING -> {
-                        btnStart.isEnabled = false
-                        btnRecord.isEnabled = true
-                        btnSave.isEnabled = true
-                        btnGen2D.isEnabled = true
-                        btnGenPixel.isEnabled = true
-                        btnStop.isEnabled = true
-                        tvStatus.text = "● 采点中..."
-                        tvStatus.setTextColor(0xFF4CAF50.toInt())
-                    }
-                    ModeController.CollectState.MAP_2D_DONE -> {
-                        // 保持可用，可重复操作
-                        btnStart.isEnabled = false
-                        btnRecord.isEnabled = true
-                        btnSave.isEnabled = true
-                        btnGen2D.isEnabled = true
-                        btnGenPixel.isEnabled = true
-                        btnStop.isEnabled = true
-                        tvStatus.text = "● 2D地图已生成"
-                        tvStatus.setTextColor(0xFF1976D2.toInt())
-                    }
-                    ModeController.CollectState.PIXEL_DONE -> {
-                        // 保持可用，可重复操作
-                        btnStart.isEnabled = false
-                        btnRecord.isEnabled = true
-                        btnSave.isEnabled = true
-                        btnGen2D.isEnabled = true
-                        btnGenPixel.isEnabled = true
-                        btnStop.isEnabled = true
-                        tvStatus.text = "● 像素坐标已生成"
-                        tvStatus.setTextColor(0xFF1976D2.toInt())
-                    }
-                    else -> {}
-                }
-            }
-        }
-
-        modeController.onCollectStateChanged = { state -> updateUi(state) }
-        updateUi(modeController.collectState)
-
-        // 文件列表更新回调 → 刷新地图 Spinner
-        modeController.onFileListUpdated = {
-            runOnUiThread {
-                mapAdapter.clear()
-                mapAdapter.addAll(modeController.mapFileList)
-                mapAdapter.notifyDataSetChanged()
-                if (modeController.mapFileList.isNotEmpty()) {
-                    spMap.setSelection(0)
-                }
-            }
-        }
-
-        // 初始加载地图列表
-        modeController.listMaps()
-
-        // ── 按钮事件 ─────────────────────────────────────────
-        btnRefreshMap.setOnClickListener { modeController.listMaps() }
-
-        btnApplyMap.setOnClickListener {
-            val mapFile = spMap.selectedItem?.toString() ?: return@setOnClickListener
-            modeController.collectSetMap(mapFile)
-        }
-
-        btnApplyWpName.setOnClickListener {
-            val wpName = etWpName.text.toString().trim()
-            if (wpName.isNotEmpty()) {
-                modeController.collectSetWpName(wpName)
-            }
-        }
-
-        btnStart.setOnClickListener {
-            val mapFile = spMap.selectedItem?.toString()
-            val wpName = etWpName.text.toString().trim()
-            if (mapFile != null) modeController.collectSetMap(mapFile)
-            if (wpName.isNotEmpty()) modeController.collectSetWpName(wpName)
-            modeController.collectStart()
-        }
-
-        btnRecord.setOnClickListener { waypointCtrl.recordWaypoint() }
-        btnSave.setOnClickListener { waypointCtrl.saveWaypoints() }
-        btnGen2D.setOnClickListener { modeController.collectGen2D() }
-        btnGenPixel.setOnClickListener { modeController.collectGenPixel() }
-
-        btnStop.setOnClickListener {
-            modeController.collectStop()
-            updateUi(ModeController.CollectState.IDLE)
-        }
-
-        btnClose.setOnClickListener {
-            dialog.dismiss()
-        }
-
-        dialog.setOnDismissListener {
-            modeController.onCollectStateChanged = { state ->
-                runOnUiThread {
-                    when (state) {
-                        ModeController.CollectState.IDLE -> Log.i(TAG, "采点状态: 空闲")
-                        ModeController.CollectState.RUNNING -> Log.i(TAG, "采点状态: 采点中")
-                        ModeController.CollectState.MAP_2D_DONE -> Log.i(TAG, "采点状态: 2D已生成")
-                        ModeController.CollectState.PIXEL_DONE -> Log.i(TAG, "采点状态: 像素已生成")
-                        else -> {}
-                    }
-                }
-            }
-        }
-
-        dialog.show()
-    }
-
-    private fun showCruiseDialog() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_cruise, null)
-        val etServer = dialogView.findViewById<EditText>(R.id.etCruiseServer)
-        val etGimbalPitch = dialogView.findViewById<EditText>(R.id.etCruiseGimbalPitch)
-        val btnSetGimbalPitch = dialogView.findViewById<Button>(R.id.btnCruiseSetGimbalPitch)
-        val spWp = dialogView.findViewById<Spinner>(R.id.spCruiseWp)
-        val btnRefreshWp = dialogView.findViewById<Button>(R.id.btnCruiseRefreshWp)
-        val btnSelectWp = dialogView.findViewById<Button>(R.id.btnCruiseSelectWp)
-        val btnStart = dialogView.findViewById<Button>(R.id.btnCruiseStart)
-        val btnClose = dialogView.findViewById<Button>(R.id.btnCruiseClose)
-        val tvStatus = dialogView.findViewById<TextView>(R.id.tvCruiseStatus)
-
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .setCancelable(false)
-            .create()
-
-        val wpAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, mutableListOf<String>()).apply {
-            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        }
-        spWp.adapter = wpAdapter
-
-        fun setStatus(text: String, color: Int = 0xFFAAAAAA.toInt()) {
-            runOnUiThread {
-                tvStatus.text = text
-                tvStatus.setTextColor(color)
-            }
-        }
-
-        fun refreshWaypoints() {
-            modeController.listWaypoints()
-        }
-
-        // 文件列表更新回调 → 刷新航线 Spinner
-        modeController.onFileListUpdated = {
-            runOnUiThread {
-                wpAdapter.clear()
-                wpAdapter.addAll(modeController.waypointFileList)
-                wpAdapter.notifyDataSetChanged()
-                if (modeController.waypointFileList.isNotEmpty()) {
-                    spWp.setSelection(0)
-                }
-            }
-        }
-
-        // 初始加载航线列表
-        refreshWaypoints()
-
-        btnRefreshWp.setOnClickListener { refreshWaypoints() }
-
-        // 服务器地址变更时发到 mode_manager 存储
-        etServer.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) {
-                val addr = etServer.text.toString().trim()
-                if (addr.isNotEmpty()) {
-                    modeController.cruiseSetServer(addr)
-                }
-            }
-        }
-        // 打开弹窗时先发一次当前地址
-        val initialAddr = etServer.text.toString().trim()
-        if (initialAddr.isNotEmpty()) {
-            modeController.cruiseSetServer(initialAddr)
-        }
-
-        // 云台俯仰角 → 点击"应用"按钮后发送到 mode_manager 存储
-        btnSetGimbalPitch.setOnClickListener {
-            val pitch = etGimbalPitch.text.toString().trim()
-            if (pitch.isNotEmpty()) {
-                modeController.cruiseSetGimbalPitch(pitch)
-                setStatus("云台角度已设为 ${pitch}°", 0xFF4CAF50.toInt())
-            }
-        }
-
-        // 选择航线 → 通过 PSDK 发到 mode_manager，由它调用 airlineInfo API
-        btnSelectWp.setOnClickListener {
-            val wpName = spWp.selectedItem?.toString() ?: return@setOnClickListener
-            setStatus("正在选择航线...", 0xFFFF9800.toInt())
-            modeController.cruiseSelectWp(wpName)
-        }
-
-        // 开始巡航 → 通过 PSDK 发到 mode_manager，由它调用 sendCommand API
-        btnStart.setOnClickListener {
-            setStatus("正在发送起飞指令...", 0xFFFF9800.toInt())
-            btnStart.isEnabled = false
-            modeController.cruiseStart()
-            btnStart.text = "起飞指令已发送"
-        }
-
-        btnClose.setOnClickListener {
-            dialog.dismiss()
-        }
-
-        dialog.setOnDismissListener { }
-
-        dialog.show()
-    }
-
-    private fun showSettingsDialog() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_settings, null)
-        val etServerIp = dialogView.findViewById<EditText>(R.id.etServerIp)
-        val etServerPort = dialogView.findViewById<EditText>(R.id.etServerPort)
-        val etRemoteCtrlIp = dialogView.findViewById<EditText>(R.id.etRemoteCtrlIp)
-        val etRemoteCtrlPort = dialogView.findViewById<EditText>(R.id.etRemoteCtrlPort)
-        val etFtpServerIp = dialogView.findViewById<EditText>(R.id.etFtpServerIp)
-        val etFtpServerPort = dialogView.findViewById<EditText>(R.id.etFtpServerPort)
-        val etLocalPort = dialogView.findViewById<EditText>(R.id.etLocalPort)
-        val btnClose = dialogView.findViewById<Button>(R.id.btnSettingsClose)
-        val tvStatus = dialogView.findViewById<TextView>(R.id.tvSettingsStatus)
-
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .setCancelable(false)
-            .create()
-
-        fun setStatus(text: String, color: Int = 0xFFAAAAAA.toInt()) {
-            runOnUiThread {
-                tvStatus.text = text
-                tvStatus.setTextColor(color)
-            }
-        }
-
-        // 为每个配置项绑定保存按钮
-        fun setupSaveButton(btnId: Int, etId: EditText, key: String) {
-            dialogView.findViewById<Button>(btnId).setOnClickListener {
-                val value = etId.text.toString().trim()
-                if (value.isNotEmpty()) {
-                    modeController.settingsUpdate(key, value)
-                    setStatus("$key 已设为 $value", 0xFF4CAF50.toInt())
-                } else {
-                    setStatus("输入不能为空", 0xFFFF4444.toInt())
-                }
-            }
-        }
-
-        setupSaveButton(R.id.btnServerIp, etServerIp, "server_ip")
-        setupSaveButton(R.id.btnServerPort, etServerPort, "server_port")
-        setupSaveButton(R.id.btnRemoteCtrlIp, etRemoteCtrlIp, "remote_controller_ip")
-        setupSaveButton(R.id.btnRemoteCtrlPort, etRemoteCtrlPort, "remote_controller_port")
-        setupSaveButton(R.id.btnFtpServerIp, etFtpServerIp, "ftp_server_ip")
-        setupSaveButton(R.id.btnFtpServerPort, etFtpServerPort, "ftp_server_port")
-        setupSaveButton(R.id.btnLocalPort, etLocalPort, "local_port")
-
-        // 配置回读回调：更新所有 EditText
-        modeController.onSettingsResponse = { config ->
-            runOnUiThread {
-                config["server_ip"]?.let { etServerIp.setText(it) }
-                config["server_port"]?.let { etServerPort.setText(it) }
-                config["remote_controller_ip"]?.let { etRemoteCtrlIp.setText(it) }
-                config["remote_controller_port"]?.let { etRemoteCtrlPort.setText(it) }
-                config["ftp_server_ip"]?.let { etFtpServerIp.setText(it) }
-                config["ftp_server_port"]?.let { etFtpServerPort.setText(it) }
-                config["local_port"]?.let { etLocalPort.setText(it) }
-                setStatus("✅ 配置已刷新", 0xFF4CAF50.toInt())
-            }
-        }
-
-        btnClose.setOnClickListener { dialog.dismiss() }
-        dialog.show()
     }
 }
