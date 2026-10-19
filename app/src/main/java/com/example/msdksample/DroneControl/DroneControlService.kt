@@ -93,6 +93,7 @@ class DroneControlService : Service() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listenerRegistered = AtomicBoolean(false)
+    private val landingCommandPending = AtomicBoolean(false)
     @Volatile private var nextRetryDelayMs = REG_RETRY_BASE_MS
 
     private val payloadDataListener = PayloadDataListener { bytes ->
@@ -148,8 +149,7 @@ class DroneControlService : Service() {
         if (visualLandingActive && frame.cmd in setOf(
                 DroneCommProtocol.CMD_TAKEOFF, DroneCommProtocol.CMD_LAND,
                 DroneCommProtocol.CMD_VEL, DroneCommProtocol.CMD_GIMBAL_YAW_FOLLOW,
-                DroneCommProtocol.CMD_GIMBAL_ANGLE, DroneCommProtocol.CMD_CAM_ZOOM,
-                DroneCommProtocol.CMD_VISION_LANDING)) {
+                DroneCommProtocol.CMD_GIMBAL_ANGLE, DroneCommProtocol.CMD_CAM_ZOOM)) {
             sendAck(frame.cmd, DroneCommProtocol.ACK_FAIL)
             return
         }
@@ -342,18 +342,47 @@ class DroneControlService : Service() {
             DroneCommProtocol.CMD_VISION_LANDING -> {
                 Log.i(TAG, "来自 Jetson: 视觉降落")
                 val ctrl = landingController
-                if (ctrl != null && DualMarkerLandingConfig.landingError() == null && !isVelocityPanelActive) {
-                    // 先在当前 Binder 线程立即触发重置，消除主线程排队带来的时序滞后风险
-                    onResetVisionTracking?.invoke()
-                    onStartCameraStream?.invoke()
-
-                    // 注册降落成功回调：视觉降落完成后给 Jetson 发 CMD_ACK_LAND_COMPLETE
-                    ctrl.onLandingSucceed = {
-                        sendNotification(DroneCommProtocol.CMD_ACK_LAND_COMPLETE)
-                    }
-
-                    mainHandler.post { ctrl.startVisionLanding() }
+                if (landingCommandPending.get()) return
+                if (ctrl?.getTaskState() == TaskState.LANDING) {
+                    // 同一任务的重发：视觉控制已启动，可重复确认而不重新接管。
                     sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_OK)
+                    return
+                }
+                if (ctrl?.getTaskState() == TaskState.LANDING_PREP) {
+                    // 其他入口正在接管，不能将此指令误认为降落已启动。
+                    sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_FAIL)
+                    return
+                }
+                if (ctrl != null && DualMarkerLandingConfig.landingError() == null && !isVelocityPanelActive) {
+                    if (!landingCommandPending.compareAndSet(false, true)) return
+                    val posted = runCatching {
+                        // 先在当前 Binder 线程立即触发重置，消除主线程排队带来的时序滞后风险
+                        onResetVisionTracking?.invoke()
+                        onStartCameraStream?.invoke()
+
+                        // 只有确认着陆和停桨后才发送完成通知。
+                        ctrl.onLandingSucceed = {
+                            sendNotification(DroneCommProtocol.CMD_ACK_LAND_COMPLETE)
+                        }
+
+                        mainHandler.post {
+                            runCatching {
+                                ctrl.startVisionLanding { accepted ->
+                                    landingCommandPending.set(false)
+                                    sendAck(DroneCommProtocol.CMD_VISION_LANDING,
+                                        if (accepted) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL)
+                                }
+                            }.onFailure {
+                                Log.e(TAG, "视觉降落启动异常", it)
+                                if (landingCommandPending.getAndSet(false))
+                                    sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_FAIL)
+                            }
+                        }
+                    }.onFailure { Log.e(TAG, "视觉降落指令准备失败", it) }.getOrDefault(false)
+                    if (!posted) {
+                        landingCommandPending.set(false)
+                        sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_FAIL)
+                    }
                 } else {
                     Log.w(TAG, "landingController 未注入，忽略 CMD_VISION_LANDING")
                     sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_FAIL)

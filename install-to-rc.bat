@@ -2,8 +2,12 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
-set "ADB=X:\Sdk\platform-tools\adb.exe"
+
+rem Prefer the real local SDK path. X:\Sdk is the old subst-mapped path and
+rem does not exist unless setup-android-sdk-drive.bat was run.
+set "ADB=%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"
 if not exist "%ADB%" set "ADB=X:\Sdk\platform-tools\adb.exe"
+if not exist "%ADB%" if defined ANDROID_HOME set "ADB=%ANDROID_HOME%\platform-tools\adb.exe"
 set "APK=%SCRIPT_DIR%app\build\outputs\apk\debug\app-debug.apk"
 set "PACKAGE_NAME=com.example.msdksample"
 set "ACTIVITY_NAME=%PACKAGE_NAME%/.MainActivity"

@@ -15,6 +15,7 @@ import dji.sdk.keyvalue.value.camera.CameraVideoStreamSourceType
 import dji.sdk.keyvalue.value.common.Velocity3D
 import dji.sdk.keyvalue.value.flightcontroller.FlightCoordinateSystem
 import dji.sdk.keyvalue.value.flightcontroller.FlightMode
+import dji.sdk.keyvalue.value.flightcontroller.RemoteControllerFlightMode
 import dji.sdk.keyvalue.value.flightcontroller.FlightControlAuthorityChangeReason
 import dji.sdk.keyvalue.value.flightcontroller.RollPitchControlMode
 import dji.sdk.keyvalue.value.flightcontroller.VerticalControlMode
@@ -65,6 +66,7 @@ class LandingController {
     var onYawRateUpdate: ((yawRate: Double) -> Unit)? = null
     var onBatteryUpdate: ((pct: Int) -> Unit)? = null
     var onLandingSucceed: (() -> Unit)? = null
+    private var pendingStartResult: ((Boolean) -> Unit)? = null
 
     var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 
@@ -118,7 +120,7 @@ class LandingController {
         override fun onValueChange(oldValue: FlightMode?, newValue: FlightMode?) {
             val name = newValue?.name ?: ""
             lastKnownFlightMode = name
-            if (taskStateRef.get() != TaskState.INACTIVE) {
+            if (taskStateRef.get() == TaskState.LANDING && name.isNotEmpty()) {
                 val finalModeAllowed = isFinalPhase() &&
                     (name == "AUTO_LANDING" || name == "LANDING")
                 // 正常触地也会退出 AUTO_LANDING，不能仅凭模式变化取消着陆。
@@ -126,6 +128,14 @@ class LandingController {
                     Log.w(TAG, "🛑 检测到非白名单模式 ($name),判定为飞手接管")
                     stopMission("飞手切挡接管 ($name)")
                 }
+            }
+        }
+    }
+
+    private val remoteModeListener = object : CommonCallbacks.KeyListener<RemoteControllerFlightMode> {
+        override fun onValueChange(oldValue: RemoteControllerFlightMode?, newValue: RemoteControllerFlightMode?) {
+            if (taskStateRef.get() != TaskState.INACTIVE && newValue != RemoteControllerFlightMode.P) {
+                stopMission("遥控器切出 N 挡或挡位状态不可用 (${newValue?.name ?: "未知"})")
             }
         }
     }
@@ -240,6 +250,9 @@ class LandingController {
         runCatching {
             KeyManager.getInstance().listen(KeyTools.createKey(FlightControllerKey.KeyFlightMode), this, flightModeListener)
         }
+        runCatching {
+            KeyManager.getInstance().listen(KeyTools.createKey(FlightControllerKey.KeyRemoteControllerFlightMode), this, remoteModeListener)
+        }
         runCatching { VirtualStickManager.getInstance().setVirtualStickStateListener(stickStateListener) }
             .onFailure { Log.w(TAG, "无法监听虚拟摇杆状态，释放恢复仅依赖接口应答", it) }
     }
@@ -260,13 +273,16 @@ class LandingController {
     }
 
     @Synchronized
-    fun startVisionLanding() {
+    fun startVisionLanding(onStartResult: ((Boolean) -> Unit)? = null) {
+        fun reject(message: String) {
+            onError?.invoke(message)
+            onStartResult?.invoke(false)
+        }
         if (stopping) {
             refreshStopCompletion()
             if (stopping) {
                 val km = KeyManager.getInstance()
-                val mode = km.getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name.orEmpty()
-                if (km.getValue(KeyTools.createKey(FlightControllerKey.KeyConnection)) != true || !isNormalFlightMode(mode)) {
+                if (km.getValue(KeyTools.createKey(FlightControllerKey.KeyConnection)) != true || !isRemoteNMode()) {
                     onError?.invoke("上次中止尚未确认释放，请保持连接并切回 N 挡后再次点击")
                 } else if (enablePending || stopDisablePending || stopCancelPending) {
                     onError?.invoke("仍在等待控制权操作应答，暂不能重新降落；请保持人工控制")
@@ -274,27 +290,36 @@ class LandingController {
                     onMessage?.invoke("正在重新确认释放控制权，完成后请再次点击降落")
                     requestStopRelease(missionGeneration)
                 }
+                onStartResult?.invoke(false)
                 return
             }
         }
         if (enablePending) {
-            onError?.invoke("正在等待控制权接管应答，请勿重复启动")
+            reject("正在等待控制权接管应答，请勿重复启动")
             return
         }
-        if (taskStateRef.get() != TaskState.INACTIVE) return
+        if (taskStateRef.get() != TaskState.INACTIVE) {
+            onStartResult?.invoke(false)
+            return
+        }
         if (DroneControlService.isVelocityPanelActive) {
-            onError?.invoke("请先停止手动速度控制，再启动视觉降落")
+            reject("请先停止手动速度控制，再启动视觉降落")
             return
         }
         DualMarkerLandingConfig.landingError()?.let {
-            onError?.invoke("双码降落参数未完成: $it")
+            reject("双码降落参数未完成: $it")
             return
         }
         if (!isWideCameraSelected()) {
-            onError?.invoke("视觉降落需要广角相机，请先切换广角并等待画面稳定")
+            reject("视觉降落需要广角相机，请先切换广角并等待画面稳定")
+            return
+        }
+        if (!isRemoteNMode()) {
+            reject("⚠️ 拦截: 请将遥控器实体挡位切入 N 挡")
             return
         }
         val generation = ++missionGeneration
+        pendingStartResult = onStartResult
         setTaskState(TaskState.LANDING_PREP)
 
         controlHandler.post {
@@ -302,6 +327,10 @@ class LandingController {
                 if (generation != missionGeneration) return@post
                 pollFlightStatusSync()
                 val state = aircraftStateRef.get()
+                if (KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyConnection)) != true) {
+                    dispatchError("⚠️ 拦截: 飞控连接状态不可用")
+                    return@post
+                }
 
                 if (!state.isFlying) {
                     dispatchError("⚠️ 拦截: 无人机尚未起飞!")
@@ -311,9 +340,13 @@ class LandingController {
                     dispatchError("⚠️ 拦截: 等待 IMU 航向初始化")
                     return@post
                 }
+                if (!isRemoteNMode()) {
+                    dispatchError("⚠️ 拦截: 遥控器已切出 N 挡或挡位状态不可用")
+                    return@post
+                }
                 val modeName = runCatching { KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name ?: "" }.getOrElse { "" }
                 if (!isNormalFlightMode(modeName)) {
-                    dispatchError("⚠️ 拦截: 请切入 N 挡! (当前:$modeName)")
+                    dispatchError("⚠️ 拦截: 飞控模式不可用于视觉降落 (当前:$modeName)")
                     return@post
                 }
                 lastKnownFlightMode = modeName
@@ -340,6 +373,10 @@ class LandingController {
                         }
                         VirtualStickManager.getInstance().setVirtualStickAdvancedModeEnabled(true)
                         isVirtualStickActive = true
+                        if (!isRemoteNMode()) {
+                            dispatchError("遥控器已切出 N 挡，停止视觉降落并释放控制权")
+                            return
+                        }
                         landingStartTimeMs = SystemClock.elapsedRealtime()
                         missionState = MissionState.SEARCHING
                         setTaskState(TaskState.LANDING)
@@ -347,6 +384,7 @@ class LandingController {
 
                         controlHandler.removeCallbacks(flightControlRunnable)
                         controlHandler.post(flightControlRunnable)
+                        finishStartResult(true)
                         Log.i(TAG, "✅ 虚拟摇杆已开启, SEARCHING 开始")
                         }
                     }
@@ -360,6 +398,10 @@ class LandingController {
                         }
                     }
                 })
+                controlHandler.postDelayed({
+                    if (generation == missionGeneration && taskStateRef.get() == TaskState.LANDING_PREP && enablePending)
+                        dispatchError("虚拟摇杆接管超时，请人工接管")
+                }, 8_000L)
             } catch (e: Exception) {
                 enablePending = false
                 Log.e(TAG, "启动降落异常", e)
@@ -372,15 +414,17 @@ class LandingController {
     fun stopMission(reason: String, completed: Boolean = false) {
         val prev = taskStateRef.getAndSet(TaskState.INACTIVE)
         if (prev == TaskState.INACTIVE) return
-        stopping = true
-        stopStartedMs = SystemClock.elapsedRealtime()
+        val needsStickRelease = isVirtualStickActive || enablePending
         val wasFinalLanding = isFinalPhase()
-        stopStickConfirmed = false
+        stopping = needsStickRelease || (wasFinalLanding && !completed)
+        stopStartedMs = SystemClock.elapsedRealtime()
+        stopStickConfirmed = !needsStickRelease
         stopLandingConfirmed = !wasFinalLanding || completed
         stopDisablePending = false
         stopDisableAgain = false
         stopCancelPending = false
         missionGeneration++
+        finishStartResult(false)
         // 先切断后续喂帧，再请求零速度，最后释放 SDK 控制权。
         controlHandler.removeCallbacks(flightControlRunnable)
         sendZeroVelocity()
@@ -399,7 +443,7 @@ class LandingController {
         onMessage?.invoke("🔴 已退出: $reason")
 
         controlHandler.removeCallbacks(flightControlRunnable)
-        requestStopRelease(missionGeneration)
+        if (stopping) requestStopRelease(missionGeneration)
     }
 
     /** 只能根据成功应答或近期 SDK 状态解除中止锁；切回 N 挡本身不是释放证据。 */
@@ -433,7 +477,8 @@ class LandingController {
     private fun requestStopRelease(generation: Int) {
         if (!stopping || generation != missionGeneration || stopDisablePending || stopCancelPending) return
         // 先标记全部请求，防止同步回调提前解锁。旧任务回调不得改变新任务的锁。
-        stopDisablePending = true
+        val needsDisable = !stopStickConfirmed || stopDisableAgain
+        stopDisablePending = needsDisable
         stopDisableAgain = false
         stopCancelPending = !stopLandingConfirmed
         if (stopCancelPending) {
@@ -462,6 +507,10 @@ class LandingController {
                 stopCancelPending = false
                 onError?.invoke("无法取消自动降落，请使用遥控器接管")
             }
+        }
+        if (!needsDisable) {
+            refreshStopCompletion()
+            return
         }
         // 高级模式设置失败不能阻止后续关闭虚拟摇杆请求。
         runCatching { VirtualStickManager.getInstance().setVirtualStickAdvancedModeEnabled(false) }
@@ -496,6 +545,7 @@ class LandingController {
     fun release() {
         stopMission("Controller Released")
         runCatching { KeyManager.getInstance().cancelListen(KeyTools.createKey(FlightControllerKey.KeyFlightMode), this) }
+        runCatching { KeyManager.getInstance().cancelListen(KeyTools.createKey(FlightControllerKey.KeyRemoteControllerFlightMode), this) }
         runCatching { VirtualStickManager.getInstance().removeVirtualStickStateListener(stickStateListener) }
         controlHandler.removeCallbacksAndMessages(null)
         controlThread.quitSafely()
@@ -510,6 +560,19 @@ class LandingController {
         stopMission(msg)
         onError?.invoke(msg)
     }
+
+    @Synchronized
+    private fun finishStartResult(accepted: Boolean) {
+        val callback = pendingStartResult
+        pendingStartResult = null
+        callback?.invoke(accepted)
+    }
+
+    private fun isRemoteNMode(): Boolean =
+        runCatching {
+            KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyRemoteControllerFlightMode)) ==
+                RemoteControllerFlightMode.P
+        }.getOrDefault(false)
 
     private fun isNormalFlightMode(name: String): Boolean =
         name == "NORMAL" || name == "GPS_NORMAL" || name == "POSITION_CTRL"
@@ -710,6 +773,9 @@ class LandingController {
         val km = KeyManager.getInstance()
         if (km.getValue(KeyTools.createKey(FlightControllerKey.KeyConnection)) != true) {
             stopMission("飞机连接丢失"); return
+        }
+        if (!isRemoteNMode()) {
+            stopMission("遥控器切出 N 挡或挡位状态不可用"); return
         }
         val modeNow = km.getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name.orEmpty()
         val allowed = isAllowedFlightMode(modeNow) || (isFinalPhase() &&
