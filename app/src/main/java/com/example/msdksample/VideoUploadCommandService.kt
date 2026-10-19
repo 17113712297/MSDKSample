@@ -56,6 +56,7 @@ class VideoUploadCommandService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
+        if (::commandServer.isInitialized) commandServer.start()
         return START_STICKY
     }
 
