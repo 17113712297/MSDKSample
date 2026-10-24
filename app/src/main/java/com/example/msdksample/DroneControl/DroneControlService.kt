@@ -41,6 +41,10 @@ class DroneControlService : Service() {
         @Volatile
         var modeController: ModeController? = null
 
+        // ★ 新增：任务控制（暂停/继续/返航）控制器引用
+        @Volatile
+        var missionController: MissionController? = null
+
         // 用于触发 MainActivity 开启/关闭视觉流的闭包
         @Volatile
         var onStartCameraStream: (() -> Unit)? = null
@@ -320,6 +324,17 @@ class DroneControlService : Service() {
                 Log.i(TAG, "AUX_LIGHT $modeStr")
                 auxLightCtrl.setBottomAuxLight(p.mode) { ok, _ ->
                     sendAck(DroneCommProtocol.CMD_AUX_LIGHT, ackOf(ok))
+                }
+            }
+
+            // ── 任务状态上报（机载状态机 → RC） ──────────────
+            // 周期上报，无需 ACK；只用来驱动 UI 与按钮置灰
+            DroneCommProtocol.CMD_MISSION_STATE -> {
+                val p = DroneCommProtocol.parseMissionStatePayload(frame.payload)
+                if (p == null) {
+                    Log.w(TAG, "MISSION_STATE 载荷解析失败 (len=${frame.payload.size})")
+                } else {
+                    missionController?.updateState(p.state, p.wpIndex, p.wpTotal)
                 }
             }
 

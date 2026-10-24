@@ -413,6 +413,42 @@
             android:textStyle="bold" />
 
         <Button
+            android:id="@+id/btnMissionPause"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#F2994A"
+            android:padding="0dp"
+            android:text="暂停"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnMissionResume"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#27AE60"
+            android:padding="0dp"
+            android:text="继续"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnMissionReturn"
+            android:layout_width="74dp"
+            android:layout_height="40dp"
+            android:layout_marginTop="6dp"
+            android:backgroundTint="#9B51E0"
+            android:padding="0dp"
+            android:text="返航"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <Button
             android:id="@+id/btnAutoLanding"
             android:layout_width="74dp"
             android:layout_height="40dp"

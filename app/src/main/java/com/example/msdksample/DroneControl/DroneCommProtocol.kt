@@ -153,11 +153,59 @@ object DroneCommProtocol {
     const val CMD_SETTINGS_RESTART_HTTP: Byte = 0x74  // 重启 HTTP 服务
 
     // ═══════════════════════════════════════════════════════
+// ★ 任务控制指令 (0x75-0x77，RC → Jetson，无载荷)
+//   对应 Jetson 侧状态机事件：pause / resume / return
+//   机载由 mission_control_node 接收，转 /mission/command
+// ═══════════════════════════════════════════════════════
+    const val CMD_PAUSE:  Byte = 0x75  // 暂停：巡航 → 暂停，悬停并保留航点索引
+    const val CMD_RESUME: Byte = 0x76  // 继续：暂停 → 巡航，从原航点接着飞
+    const val CMD_RETURN: Byte = 0x77  // 返航：暂停 → 返航，反向重放航点回到第一个点
+
+    // ═══════════════════════════════════════════════════════
+// ★ 状态上报 (0x93，Jetson → RC)
+//   payload: [state:1][wpIndex:1][wpTotal:1][reserved:1]
+// ═══════════════════════════════════════════════════════
+    const val CMD_MISSION_STATE: Byte = 0x93.toByte()
+    const val MISSION_STATE_PAYLOAD_LEN = 4
+
+    // ═══════════════════════════════════════════════════════
 // ★ 响应指令 (0x90-0x92，Jetson → Android)
 // ═══════════════════════════════════════════════════════
     const val CMD_FILE_LIST_RESPONSE:   Byte = 0x90.toByte()  // 地图文件列表响应
     const val CMD_FILE_LIST_RESPONSE_WP: Byte = 0x91.toByte()  // 航线文件列表响应
     const val CMD_SETTINGS_RESPONSE:     Byte = 0x92.toByte()  // 设置参数响应
+    /**
+     * 机载状态机状态码。
+     *
+     * 必须与 indooruav_core/include/indooruav_core/state_machine.h 的
+     * `enum class State` 顺序严格一致，否则 RC 侧按钮置灰逻辑会错位。
+     */
+    object MissionState {
+        const val UNKNOWN              = -1
+        const val AWAIT                = 0
+        const val CHECK_BEFORE_TAKEOFF = 1
+        const val TAKE_OFF             = 2
+        const val CRUISE               = 3
+        const val DATA_COLLECTION      = 4
+        const val PAUSED               = 5
+        const val RETURN               = 6
+        const val LAND                 = 7
+        const val CHARGE               = 8
+
+        fun name(state: Int): String = when (state) {
+            AWAIT                -> "待机"
+            CHECK_BEFORE_TAKEOFF -> "起飞前检查"
+            TAKE_OFF             -> "起飞中"
+            CRUISE               -> "巡航中"
+            DATA_COLLECTION      -> "数据采集"
+            PAUSED               -> "已暂停"
+            RETURN               -> "返航中"
+            LAND                 -> "降落中"
+            CHARGE               -> "充电中"
+            else                 -> "未知"
+        }
+    }
+
     // ── 载荷长度常量 ─────────────────────────────────────
     const val VEL_PAYLOAD_LEN               = 16
     const val GIMBAL_YAW_FOLLOW_PAYLOAD_LEN = 8
@@ -243,6 +291,22 @@ object DroneCommProtocol {
     fun parseAuxLightPayload(payload: ByteArray): AuxLightPayload? {
         if (payload.size < AUX_LIGHT_PAYLOAD_LEN) return null
         return AuxLightPayload(mode = payload[0])
+    }
+
+    /**
+     * 解析机载状态上报 (0x93)。
+     * payload: [state:1][wpIndex:1][wpTotal:1][reserved:1]
+     */
+    fun parseMissionStatePayload(payload: ByteArray): MissionStatePayload? {
+        if (payload.size < MISSION_STATE_PAYLOAD_LEN) return null
+        val rawState = payload[0].toInt() and 0xFF
+        return MissionStatePayload(
+            // 0xFF 表示机载还没收到过状态机状态（桥接层刚起来），映射成 UNKNOWN
+            // 这样 RC 侧会放开三个按键，而不是当成"待机"全部置灰
+            state   = if (rawState == 0xFF) MissionState.UNKNOWN else rawState,
+            wpIndex = payload[1].toInt() and 0xFF,
+            wpTotal = payload[2].toInt() and 0xFF
+        )
     }
 
     /**
@@ -356,6 +420,17 @@ object DroneCommProtocol {
         val isOff:  Boolean get() = mode == AUX_LIGHT_OFF
         val isOn:   Boolean get() = mode == AUX_LIGHT_ON
         val isAuto: Boolean get() = mode == AUX_LIGHT_AUTO
+    }
+
+    /** 机载状态上报：状态码 + 当前航点索引/总数 */
+    data class MissionStatePayload(
+        val state:   Int,
+        val wpIndex: Int,
+        val wpTotal: Int
+    ) {
+        val stateName: String get() = MissionState.name(state)
+        val progressText: String
+            get() = if (wpTotal > 0) "$wpIndex/$wpTotal" else "-"
     }
 
 }

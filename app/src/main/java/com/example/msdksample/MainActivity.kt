@@ -77,6 +77,12 @@ class MainActivity : AppCompatActivity() {
     private var btnAutoLanding: Button? = null
     private var btnTakeoff: Button? = null
 
+    // ── 任务控制（暂停 / 继续 / 返航）──────────────────────
+    private lateinit var btnMissionPause: Button
+    private lateinit var btnMissionResume: Button
+    private lateinit var btnMissionReturn: Button
+    private val missionCtrl = MissionController()
+
     private lateinit var xSpeedText: TextView
     private lateinit var ySpeedText: TextView
     private lateinit var zSpeedText: TextView
@@ -194,6 +200,10 @@ class MainActivity : AppCompatActivity() {
         modeController = ModeController()
         DroneControlService.modeController = modeController
         setupModeController()
+
+        // ★ 任务控制（暂停 / 继续 / 返航）
+        DroneControlService.missionController = missionCtrl
+        setupMissionButtons()
 
         try {
             liveStreamController = LiveStreamController(this)
@@ -344,6 +354,11 @@ class MainActivity : AppCompatActivity() {
         DroneControlService.onResetVisionTracking = null
         if (::modeController.isInitialized && DroneControlService.modeController === modeController) {
             DroneControlService.modeController = null
+        }
+        if (DroneControlService.missionController === missionCtrl) {
+            missionCtrl.onStateChanged = null
+            missionCtrl.onLogMessage = null
+            DroneControlService.missionController = null
         }
         if (::landingController.isInitialized && DroneControlService.landingController === landingController) {
             DroneControlService.landingController = null
@@ -654,6 +669,10 @@ class MainActivity : AppCompatActivity() {
         btnAutoLanding = findViewById(R.id.btnAutoLanding)
         btnTakeoff = findViewById(R.id.btnTakeoff)
 
+        btnMissionPause = findViewById(R.id.btnMissionPause)
+        btnMissionResume = findViewById(R.id.btnMissionResume)
+        btnMissionReturn = findViewById(R.id.btnMissionReturn)
+
         btnModeMapping = findViewById(R.id.btnModeMapping)
         btnModeCollect = findViewById(R.id.btnModeCollect)
         btnModeCruise = findViewById(R.id.btnModeCruise)
@@ -843,6 +862,58 @@ class MainActivity : AppCompatActivity() {
         btnRecordWaypoint.setOnClickListener { waypointCtrl.recordWaypoint() }
         btnSaveWaypoints.setOnClickListener { waypointCtrl.saveWaypoints() }
         btnClearWaypoints.setOnClickListener { waypointCtrl.clearWaypoints() }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    // ★ 任务控制：暂停 / 继续 / 返航
+    // ═══════════════════════════════════════════════════════
+    private fun setupMissionButtons() {
+        missionCtrl.onStateChanged = { state, index, total ->
+            runOnUiThread { renderMissionState() }
+        }
+        missionCtrl.onLogMessage = { msg ->
+            runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+        }
+
+        btnMissionPause.setOnClickListener {
+            missionCtrl.pause()
+        }
+
+        btnMissionResume.setOnClickListener {
+            missionCtrl.resume()
+        }
+
+        btnMissionReturn.setOnClickListener {
+            // 返航会一路退回起点，属于不可逆任务变更，加一次确认
+            AlertDialog.Builder(this)
+                .setTitle("确认返航")
+                .setMessage("将沿已飞过的航点反向退回第一个航点，随后自动进入视觉降落。")
+                .setPositiveButton("返航") { _, _ -> missionCtrl.goReturn() }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+
+        // 初始状态未知：三个按钮全部可用，等机载首帧状态上报后再按状态置灰
+        renderMissionState()
+    }
+
+    /**
+     * 根据机载状态机上报刷新按钮可用性。
+     *
+     * 语义与 indooruav_core 状态机保持一致：
+     *   Cruise   → 可暂停；继续/返航置灰
+     *   Paused   → 可继续、可返航；暂停置灰
+     *   Return   → 三个都置灰（返航是终止流程）
+     *   Land 等  → 三个都置灰
+     */
+    private fun renderMissionState() {
+        btnMissionPause.isEnabled = missionCtrl.canPause
+        btnMissionResume.isEnabled = missionCtrl.canResume
+        btnMissionReturn.isEnabled = missionCtrl.canReturn
+        Log.d(
+            TAG,
+            "mission state=${missionCtrl.stateName} wp=${missionCtrl.wpIndex}/${missionCtrl.wpTotal}"
+        )
     }
 
     private fun setupLiveStreamController() {

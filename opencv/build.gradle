@@ -20,6 +20,7 @@ android {
     namespace 'org.opencv'
     // 统一使用新版语法 compileSdk，与主 app 保持一致
     compileSdk 35
+    ndkVersion "27.0.12077973"
 
     defaultConfig {
         minSdk 21
@@ -73,6 +74,7 @@ android {
 
     externalNativeBuild {
         cmake {
+            version "3.22.1"
             path (project.projectDir.toString() + '/libcxx_helper/CMakeLists.txt')
         }
     }

@@ -1,468 +1,353 @@
-# MSDK 低延迟本地直播部署说明
+# MSDK 直播服务部署文档
 
-本文档对应方案：`安卓设备 DJI 原生 RTMP -> 本机 SRS -> WHEP/WebRTC -> 前端页面`
+这份文档用于把当前直播链路部署到另一台 Windows 电脑上，并且让你可以按步骤完成首启、联通验证和常见问题排查。
 
-部署目标固定为两台设备：
+当前方案的链路如下：
 
-- 一台安卓设备：运行 `MSDK_merge`
-- 一台 Windows 电脑：同时运行 `SRS + 前端页面`，也是观看端
+`遥控器 / Android App RTMP 推流 -> Windows 上的 SRS -> 前端页面通过 WHEP / WebRTC 拉流播放`
 
-## 运行在本机上的配置是否方便移植
+## 1. 要部署的内容
 
-方便移植。当前本机侧依赖很少，核心是把 `obs_low_latency` 整个目录带走，然后在新电脑上补齐运行环境即可。
-
-本机侧实际依赖分为两部分：
-
-- `Docker Desktop + WSL2`：用于启动 `SRS`
-- `PowerShell + 浏览器`：用于启动前端静态页面并在本机播放
-
-其中：
-
-- `SRS` 本身没有额外安装到系统里，而是通过 Docker 镜像 `ossrs/srs:5` 启动
-- 前端不依赖 Node.js，只依赖 [start-frontend.ps1](/D:/MSDK_merge/obs_low_latency/start-frontend.ps1) 启一个本地静态服务
-- 安卓端继续通过 `RTMP` 推到 Windows 主机，不需要单独迁移 SRS 配置文件到系统目录
-
-## 移植环境必备配置
-
-如果要迁移到另一台 Windows 电脑，至少需要准备：
-
-- `WSL2`
-- `Docker Desktop`
-- Chrome 或 Edge
-- Windows 自带 PowerShell 5.1 或更高版本
-
-Docker Desktop 官方下载地址：
-
-- [https://www.docker.com/products/docker-desktop/](https://www.docker.com/products/docker-desktop/)
-
-建议按下面顺序准备环境：
-
-1. 安装并启动 `Docker Desktop`
-2. 确认 Docker 使用 `WSL2` 后端
-3. 确认 `docker version` 和 `docker compose version` 能正常返回
-4. 把 `obs_low_latency` 目录和本说明文档复制到目标电脑
-5. 在目标电脑上执行 `docker compose up -d`
-6. 再启动本地前端页面
-
-## 最小迁移清单
-
-迁移到新电脑时，至少带走这些文件：
-
-- `obs_low_latency\`
-- `DEPLOYMENT.md`
-
-推荐直接保留以下目录结构，这样脚本无需修改路径即可运行：
-
-```text
-<你的目录>\
-├─ DEPLOYMENT.md
-└─ obs_low_latency\
-   ├─ docker-compose.yml
-   ├─ start-srs.bat
-   ├─ stop-srs.bat
-   ├─ start-frontend.bat
-   ├─ start-frontend.ps1
-   ├─ frontend\
-   └─ srs\conf\obs-local.conf
-```
-
-## 哪些配置是可移植的，哪些需要按机器调整
-
-以下内容通常可以直接带走，不需要改：
+`obs_low_latency` 目录里已经包含了部署需要的核心内容：
 
 - `docker-compose.yml`
 - `start-srs.bat`
 - `stop-srs.bat`
+- `watch-srs.bat`
+- `diagnose-srs.bat`
+- `start-frontend.bat`
 - `start-frontend.ps1`
-- `frontend` 页面代码
-- `srs\conf\obs-local.conf` 中当前本机播放场景的基础配置
+- `frontend\`
+- `srs\conf\obs-local.conf`
 
-以下内容迁移后需要按目标电脑环境检查：
+## 2. 新电脑的环境要求
 
-- Windows 局域网 IP
-- 安卓端填写的 `RTMP_URL`
-- 前端监听端口，比如 `7000` 或 `7001`
-- Windows 防火墙是否放行 `1935/tcp`、`1985/tcp`、`8080/tcp`、`8000/udp`
-- Docker Desktop 是否能正常拉取 `ossrs/srs:5`
+目标电脑建议满足以下条件：
 
-如果只是“在目标电脑本机浏览器里看直播”，通常只要改：
+- Windows 10 22H2 或 Windows 11
+- 已安装并可正常启动 `Docker Desktop` 
+- Docker Desktop 已启用 `WSL2`
+- 安装了最新版 `Chrome` 或 `Edge`
+- PowerShell 5.1 及以上
 
-- 安卓端推流地址里的 `<WINDOWS_IP>`
-- 你自己想使用的前端端口
+WSL2安装:
+以管理员身份打开 PowerShell，直接执行：wsl --install
+执行后自动完成：
+1. 启用虚拟机平台、WSL 功能
+2. 下载并安装默认 Ubuntu 发行版
 
-如果要让“局域网其他设备”访问该电脑上的 WebRTC 流，则通常还要改：
+这个前端页面不依赖 Node.js，不需要额外安装前端运行环境。
 
-- `srs\conf\obs-local.conf` 里的 `rtc_server.candidate`
-- 前端里使用的 `WHEP_URL`
+## 3. 默认端口和作用
 
+当前部署默认使用这些端口：
 
-移植环境必备配置：
-WSL2
-docker:https://www.docker.com/products/docker-desktop/下载地址
-SRS;作为转发视频，SRS 是通过 Docker 启动的，先启动容器
-默认变量如下，后文会把它们当成可替换变量使用：
+- `1935/tcp`：RTMP 推流入口
+- `1985/tcp`：SRS HTTP API / WHEP
+- `8080/tcp`：SRS HTTP 服务
+- `8000/udp`：WebRTC 媒体端口
+- `7001/tcp`：用于测试的前端静态页面访问端口
 
-- `PORT=7001`
-- `RTMP_URL=rtmp://<WINDOWS_IP>:1935/live/obs1`    接收遥控器的推流的端口
-- `WHEP_URL=http://127.0.0.1:1985/rtc/v1/whep/?app=live&stream=obs1`   前端拉流的地址
-- `APP_NAME=live`
-- `STREAM_NAME=obs1`
+如果这些端口被占用，需要同步修改配置，文档后面有说明。
 
-## 最短启动路径
+## 4. 在新电脑上准备目录
 
-1. 让安卓设备和 Windows 电脑连接同一局域网。
-2. 启动 Docker Desktop。
-3. 双击 `D:\MSDK_merge\obs_low_latency\start-srs.bat`。   启动SRS转发
-4. 双击 `D:\MSDK_merge\obs_low_latency\start-frontend.bat`。
-5. 浏览器打开 [http://127.0.0.1:7000](http://127.0.0.1:7000)。
-6. 在安卓设备 `MSDK_merge` 直播面板中填写 `RTMP_URL` 并开始推流。
-7. 页面看到视频即表示链路打通。
+关键点只有两个：
+obs_low_latency 目录内部结构要保持不变
+也就是这些相对位置不要拆散：
+docker-compose.yml、start-srs.bat、start-frontend.bat、frontend\、srs\conf\obs-local.conf
 
-## 目录结构
+启动时要在 obs_low_latency 目录里执行脚本
+因为现在这些脚本基本都是按“相对当前目录”工作的，所以只要整个 obs_low_latency 原样复制过去，就能跑。
 
-```text
-D:\MSDK_merge\
-├─ DEPLOYMENT.md
-└─ obs_low_latency\
-   ├─ docker-compose.yml
-   ├─ .env.example
-   ├─ start-srs.bat
-   ├─ stop-srs.bat
-   ├─ start-frontend.bat
-   ├─ start-frontend.ps1
-   ├─ frontend\
-   │  ├─ index.html
-   │  ├─ app.js
-   │  ├─ config.js
-   │  └─ styles.css
-   └─ srs\
-      └─ conf\
-         └─ obs-local.conf
-```
+## 5. 安装并检查 Docker Desktop
 
-## 依赖要求
+Docker Desktop 下载地址：
 
-### Windows 版本
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+注意下载ARM64版本
+安装完成后，先确认以下几点：
 
-- 推荐 `Windows 10 22H2` 或 `Windows 11`
-- 需要能正常运行 Docker Desktop
-- 需要本机浏览器支持 WebRTC，推荐最新版 Chrome 或 Edge
-
-### Docker Desktop 要求
-
-- 安装最新版 Docker Desktop for Windows
-- 首次安装后确保 Docker Desktop 已成功启动
-- 推荐启用默认 WSL2 引擎
-- 需要能拉取公开镜像 `ossrs/srs:5`
-
-### 前端运行时要求
-
-这版前端不依赖 Node.js。  
-前端使用交付目录里的 `start-frontend.ps1` 启动本地静态服务，因此目标电脑只需要：
-
-- Windows 自带 PowerShell 5.1 或更高版本
-- 一个支持 WebRTC 的浏览器
-
-### 安卓端要求
-
-- 安卓设备上安装并运行 `MSDK_merge`
-- 飞机正常连接
-- 安卓设备与 Windows 电脑在同一局域网
-- Android 侧直播编码需为 `H.264`
-
-## 启动 SRS
-
-在 `obs_low_latency` 目录执行：
+1. 能正常打开 Docker Desktop。
+2. Docker Desktop 状态已经变成 Running。
+3. PowerShell 里执行下面两个命令都能成功返回版本信息。
 
 ```powershell
-docker compose up -d
+docker version
+docker compose version
 ```
 
-等价的双击脚本：
+如果这里失败，不要继续后面的部署，先把 Docker Desktop 运行起来。
 
-```text
-start-srs.bat
-```
+## 6. 启动 SRS
 
-成功后，本机会开放这些端口：
+直接双击：
 
-- `1935/tcp`：RTMP ingest
-- `1985/tcp`：WHEP / HTTP API
-- `8080/tcp`：SRS HTTP 服务
-- `8000/udp`：WebRTC UDP
+- obs_low_latency\start-srs.bat`
 
-检查容器状态：
+启动成功后，执行：
 
 ```powershell
 docker compose ps
 ```
 
-查看日志：
+你应该能看到容器：
 
-```powershell
-docker compose logs -f
-```
+- `msdk-srs`
 
-停止 SRS：
+并且状态应该是：
 
-```powershell
-docker compose down
-```
+- `running`
 
-或双击：
+停止 SRS双击：
 
-```text
-stop-srs.bat
-```
+- `obs_low_latency\stop-srs.bat`
 
-## 启动前端
+## 7. 启动测试前端页面
 
-在 `obs_low_latency` 目录执行：
+前端页面的默认启动脚本是：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\start-frontend.ps1 -Port 7000
-```
+- `obs_low_latency\start-frontend.bat`
 
-或直接双击：
+它实际会把页面服务启动在 `7001` 端口。
 
-```text
-start-frontend.bat
-```
 
-启动成功后，浏览器访问：
 
-- [http://127.0.0.1:7000](http://127.0.0.1:7000)
+启动后，在部署这台电脑本机浏览器打开：
 
-## 前端配置项
+- [http://127.0.0.1:7001](http://127.0.0.1:7001)
 
-默认前端配置写在：
+说明：
 
-- [config.js](/D:/MSDK_merge/obs_low_latency/frontend/config.js)
+- `frontend/config.js` 里的 `PORT` 目前还是显示值 `7000`
+- 但 `start-frontend.bat` 实际启动端口是 `7001`
+- 部署和访问时请以脚本实际启动端口 `7001` 为准
 
-默认值：
+## 8. 查出新电脑的局域网 IP
 
-```js
-window.APP_CONFIG = {
-  PORT: "7000",
-  WHEP_URL: "http://127.0.0.1:1985/rtc/v1/whep/?app=live&stream=obs1",
-  AUTO_PLAY: true,
-  SHOW_RECONNECT: true
-};
-```
-
-## 安卓端配置步骤
-
-### Windows 电脑 IP
-
-先在 Windows 电脑上执行：
+在新电脑上执行：
 
 ```powershell
 ipconfig
 ```
 
-找到当前局域网 IPv4，例如：
+找到当前网卡的 IPv4 地址，例如：
 
 - `192.168.1.20`
 
-### 安卓端 RTMP 地址
+后面文档里用 `<WINDOWS_IP>` 表示这台新电脑的局域网 IP。
 
-在安卓设备 `MSDK_merge` 的直播面板中填写：
+## 9. 修改 Android / 遥控器推流地址
 
-```text
-rtmp://192.168.1.20:1935/live/obs1
-```
-
-其中：
-
-- `192.168.1.20` 需要替换成 Windows 电脑的局域网 IP
-- `1935` 是 SRS 的 RTMP 端口
-- `live/obs1` 是固定流名
-
-### 安卓端操作
-
-1. 打开 `MSDK_merge`
-2. 找到直播面板
-3. 在 `RTMP 地址` 输入框填写 Windows 电脑的 RTMP 地址
-4. 点击 `保存推流地址`
-5. 点击 `开始 RTMP 推流`
-
-如果直播面板提示当前编码不是 `H.264`，先在无人机相机相关设置中切换到 `H.264`
-
-## 如何验证链路打通
-
-### 1. 验证 Docker / SRS 是否正常
-
-执行：
-
-```powershell
-docker compose ps
-netstat -ano | findstr 1935
-netstat -ano | findstr 1985
-netstat -ano | findstr 8080
-netstat -ano | findstr 8000
-```
-
-应能看到 `msdk-srs` 容器处于 `running` 状态
-
-### 2. 验证前端是否启动
-
-浏览器打开：
-
-- [http://127.0.0.1:7000](http://127.0.0.1:7000)
-
-未推流时应显示：
-
-- `等待推流` 或 `连接中`
-
-### 3. 验证安卓端是否成功推流
-
-在安卓端点击 `开始 RTMP 推流` 后，观察：
-
-- 安卓端状态切到 `Streaming in progress` 或同义状态
-- SRS 日志中出现 `live/obs1`
-- 前端页面从 `连接中` 进入 `播放中`
-
-### 4. 验证低延迟
-
-用无人机相机画面中的明显动作对比浏览器页面。
-
-目标延迟：
-
-- `300ms ~ 1200ms`
-
-## 页面行为说明
-
-这版页面已经实现：
-
-- 自动拉流
-- 状态展示：`连接中 / 播放中 / 连接失败`
-- 手动重连按钮
-- 断流后自动重试
-
-## 迁移到另一台 Windows 电脑
-
-### 需要安装什么
-
-- Docker Desktop
-- Chrome 或 Edge
-
-PowerShell 通常为 Windows 自带，不需要额外安装。
-
-### 需要带过去哪些文件
-
-至少带过去：
-
-- `D:\MSDK_merge\obs_low_latency\`
-- `D:\MSDK_merge\DEPLOYMENT.md`
-
-### 哪些端口必须可用
-
-- `7000/tcp`：前端静态页面
-- `1935/tcp`：RTMP ingest
-- `1985/tcp`：WHEP / API
-- `8080/tcp`：SRS HTTP
-- `8000/udp`：WebRTC 媒体
-
-### 如果端口冲突如何改
-
-如果 `1935`、`1985`、`8080` 或 `8000` 冲突，需要同时修改：
-
-1. `obs_low_latency\docker-compose.yml`
-2. `obs_low_latency\srs\conf\obs-local.conf`
-3. 安卓端填写的 `RTMP_URL`
-4. `frontend/config.js` 中的 `WHEP_URL`
-
-例如把 `1935` 改成 `11935`：
-
-```text
-rtmp://192.168.1.20:11935/live/obs1
-```
-
-## 防火墙 / 安全软件影响
-
-重点检查：
-
-- Docker Desktop 是否被允许联网
-- `1935/tcp` 是否被拦截
-- `1985/tcp`、`8080/tcp` 是否被拦截
-- `8000/udp` 是否被拦截
-
-处理建议：
-
-1. 在 Windows Defender 防火墙中允许 Docker Desktop 通信
-2. 放行 `1935/tcp`
-3. 放行 `1985/tcp`
-4. 放行 `8080/tcp`
-5. 放行 `8000/udp`
-
-## 常见问题排查
-
-### Docker 未启动
-
-现象：
-
-- `docker compose up -d` 失败
-
-处理：
-
-- 先启动 Docker Desktop
-
-### 安卓 RTMP 地址填写错误
-
-现象：
-
-- 安卓端不能开始直播
-- 页面一直拉不到流
-
-处理：
-
-- 确认 RTMP 地址格式：
+把遥控器或 Android App 里的 RTMP 推流地址改成：
 
 ```text
 rtmp://<WINDOWS_IP>:1935/live/obs1
 ```
 
-- 确认 `<WINDOWS_IP>` 是 Windows 电脑局域网地址，不是 `127.0.0.1`
+例如新电脑 IP 是 `192.168.1.20`，那就填：
 
-### 安卓端当前不是 H.264
+```text
+rtmp://192.168.1.20:1935/live/obs1
+```
 
-现象：
+如果这里没改，推流仍然会打到旧电脑，前端当然看不到新电脑上的流。
 
-- 安卓端提示不支持当前编码格式
+## 10. 部署场景
 
-处理：
+### 场景 ：只在部署这台电脑本机看直播
 
-- 将无人机相机直播编码切到 `H.264`
+如果你只在这台新电脑本机浏览器里看流，当前默认配置基本可以直接用，不需要改下面两个文件：
 
-### Windows 防火墙拦截
+- `obs_low_latency\srs\conf\obs-local.conf`
+- `obs_low_latency\frontend\config.js`
 
-现象：
+也就是说，下面这两个默认值可以先保留：
 
-- 安卓端开始推流失败
-- 页面能打开但不播放
+- `rtc_server.candidate = 127.0.0.1`
+- `WHEP_URL = http://127.0.0.1:1985/rtc/v1/whep/?app=live&stream=obs1`
 
-处理：
 
-- 放行 `1935/tcp`
-- 放行 `1985/tcp`
-- 放行 `8080/tcp`
-- 放行 `8000/udp`
+## 11. 首次部署后的联通验证
 
-## 说明与边界
+建议按下面顺序检查。
 
-本版方案只覆盖：
+### 第一步：确认 SRS 正常运行
 
-- 两台设备
-- 安卓 DJI 原生 RTMP 推流
-- Windows 本机 SRS
-- 浏览器 WHEP/WebRTC 播放
-- 单路直播
-- 局域网访问
+```powershell
+docker compose ps
+```
 
-本版不包含：
+预期结果：
 
-- OBS
-- 安卓端直推 WHIP
-- HTTPS
-- 公网分发
-- 多路流管理
+- 能看到 `msdk-srs`
+- 状态是 `running`
+
+### 第二步：确认端口已经监听
+
+```powershell
+netstat -ano | findstr 1935
+netstat -ano | findstr 1985
+netstat -ano | findstr 8080
+netstat -ano | findstr 7001
+```
+
+如果你要查 WebRTC UDP 端口：
+
+```powershell
+netstat -ano -p udp | findstr 8000
+```
+
+### 第三步：确认前端页面能打开
+
+本机浏览器打开：
+
+- [http://127.0.0.1:7001](http://127.0.0.1:7001)
+
+如果是其他局域网设备访问，就打开：
+
+- `http://<WINDOWS_IP>:7001`
+
+页面打开但还没推流时，属于正常现象：
+
+- 页面能打开
+- 视频区显示等待或连接中
+
+### 第四步：开始 RTMP 推流
+
+在遥控器或 Android App 中：
+
+1. 填好 RTMP 地址。
+2. 点击开始 RTMP 推流。
+3. 确认遥控器端显示正在推流。
+
+### 第五步：观察 SRS 是否收到流
+
+执行：
+
+```powershell
+docker logs --since 2m msdk-srs
+```
+
+预期应该能看到和 `live/obs1` 相关的连接或会话信息。
+
+### 第六步：确认页面开始播放
+
+如果一切正常，前端页面会从等待状态进入播放状态。
+
+## 12. 防火墙要求
+
+如果新电脑开着 Windows Defender 防火墙，至少要确保这些端口没有被拦住：
+
+- `1935/tcp`
+- `1985/tcp`
+- `8080/tcp`
+- `8000/udp`
+- `7001/tcp`
+
+最容易出问题的是两种情况：
+
+- 遥控器推流到 `1935/tcp` 被拦截
+- 其他设备访问 `1985/tcp` 或 `8000/udp` 时被拦截，导致页面能开但就是播不出来
+
+## 13. 如果端口冲突，应该改哪里
+
+如果目标电脑上默认端口被占用，需要同步修改下面几处。
+
+### RTMP 端口冲突
+
+比如把 `1935` 改成 `11935`，需要同时改：
+
+1. `D:\MSDKSample\obs_low_latency\docker-compose.yml`
+2. 遥控器 / Android App 里的 RTMP 推流地址
+
+新的推流地址会变成：
+
+```text
+rtmp://<WINDOWS_IP>:11935/live/obs1
+```
+
+### WHEP / API 端口冲突
+
+如果把 `1985` 改掉，需要同时改：
+
+1. `obs_low_latency\docker-compose.yml`
+2. `\obs_low_latency\srs\conf\obs-local.conf`
+3. `obs_low_latency\frontend\config.js`
+
+### Web 页面端口冲突
+
+如果把页面从 `7001` 改成别的端口，需要改：
+
+1. `obs_low_latency\start-frontend.bat`
+2. 你访问页面时使用的地址
+3. 如果你希望页面上显示的 `PORT` 也一致，再改 `frontend/config.js`
+
+
+
+## 14. 最常见的故障和处理方法
+
+### 1. 遥控器显示在推流，但 `docker compose ps` 正常，页面没画面
+
+先检查：
+
+- RTMP 地址是不是还指向旧电脑
+- 新电脑和遥控器是不是在同一个局域网
+- 新电脑防火墙有没有拦 `1935/tcp`
+
+### 2. 页面能打开，但一直连接不上
+
+先检查：
+
+- `msdk-srs` 是否正常运行
+- `WHEP_URL` 是否写对
+- 如果是其他电脑访问页面，`candidate` 是否仍然是 `127.0.0.1`
+- `8000/udp` 是否被防火墙拦截
+
+### 3. 只有本机能看，其他电脑看不到
+
+基本就是下面两项没有改：
+
+- `obs-local.conf` 里的 `candidate`
+- `frontend/config.js` 里的 `WHEP_URL`
+
+它们不能继续写 `127.0.0.1`，必须改成部署机的真实局域网 IP。
+
+### 4. 推流后画面很卡，重启 SRS 才恢复
+
+先执行：
+
+```powershell
+.\diagnose-srs.bat
+```
+
+再查看：
+
+```powershell
+docker logs --since 5m msdk-srs
+```
+
+如果需要持续观察，可以执行：
+
+```powershell
+.\watch-srs.bat
+```
+
+这样可以先留住现场，再决定是否重启 SRS。
+
+## 16. 新电脑首次部署的最短执行清单
+
+如果你只想照着做一遍，按这个顺序执行就可以：
+
+1. 把 `D:\MSDKSample\obs_low_latency\` 整个复制到新电脑。
+2. 安装并启动 Docker Desktop。
+3. 在 PowerShell 执行 `docker version` 和 `docker compose version` 确认 Docker 正常。
+4. 进入 `D:\MSDKSample\obs_low_latency` 执行 `docker compose up -d`。
+5. 执行 `docker compose ps`，确认 `msdk-srs` 是 `running`。
+6. 双击 `D:\MSDKSample\obs_low_latency\start-frontend.bat`。
+7. 在新电脑执行 `ipconfig`，记下 IPv4。
+8. 把遥控器的 RTMP 地址改成 `rtmp://<WINDOWS_IP>:1935/live/obs1`。
+9. 本机浏览器打开 `http://127.0.0.1:7001`。
+10. 开始推流并观察页面是否出画面。
+11. 如果要让其他设备看流，再把 `candidate` 和 `WHEP_URL` 里的 `127.0.0.1` 改成新电脑 IP。
+
