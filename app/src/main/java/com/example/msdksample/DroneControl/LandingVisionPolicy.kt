@@ -9,5 +9,5 @@ object LandingVisionPolicy {
                    yawError: Double, stable: Boolean): Boolean =
         stable && depth.isFinite() && depth > 0.05 && depth <= handoffDepth &&
             radialError.isFinite() && radialError <= DualMarkerLandingConfig.ALIGN_TOLERANCE_M &&
-            yawError.isFinite() && kotlin.math.abs(yawError) < 6.0
+            yawError.isFinite() && kotlin.math.abs(yawError) < 3.0
 }

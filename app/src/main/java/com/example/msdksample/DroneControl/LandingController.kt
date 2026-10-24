@@ -53,7 +53,7 @@ class LandingController {
         const val VISION_STALE_MS      = 5_000L
         const val VISION_HOLD_MS       = 200L
         const val INITIAL_SEARCH_TIMEOUT_MS = 8_000L
-        const val ALIGN_YAW_THRESHOLD_DEG = 6.0
+        const val ALIGN_YAW_THRESHOLD_DEG = 3.0
     }
 
     // =========================================================================
@@ -345,7 +345,7 @@ class LandingController {
                     return@post
                 }
                 val modeName = runCatching { KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name ?: "" }.getOrElse { "" }
-                if (!isNormalFlightMode(modeName)) {
+                if (!isAllowedFlightMode(modeName)) {
                     dispatchError("⚠️ 拦截: 飞控模式不可用于视觉降落 (当前:$modeName)")
                     return@post
                 }
