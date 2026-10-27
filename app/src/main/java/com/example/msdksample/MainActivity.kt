@@ -1318,6 +1318,36 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /**
+     * 对话框标题：加载中显示"加载中…（第 x 页）"，到过末页后显示"共 N 条 · 第 x/y 页"。
+     *
+     * 为什么总数不是一开始就有：分页协议里没有 total 字段，
+     * 只有翻到末页（next=0xFFFF）才能确定总数和总页数。
+     */
+    private fun buildListTitle(label: String, s: FileListPager.State): String {
+        val page = s.pageIndex + 1
+        val loadingPage = (s.loadingPageIndex ?: s.pageIndex) + 1
+        return when {
+            s.isLoading -> "$label · 加载中…（第 $loadingPage 页）"
+            s.error != null -> "$label · ${s.error}"
+            s.legacy -> "$label · 共 ${s.loadedCount} 条（机载不支持分页）"
+            s.totalCount != null -> "$label · 共 ${s.totalCount} 条 · 第 $page/${s.pageCount ?: page} 页"
+            else -> "$label · 第 $page 页 · 已加载 ${s.loadedCount} 条"
+        }
+    }
+
+    /** 页码行：第 x/y 页 · 本页 k 条 · 第 a–b 条 */
+    private fun buildPageInfo(s: FileListPager.State): String = when {
+        s.isLoading -> "加载中…"
+        s.error != null -> "加载失败，点「下一页」或「刷新」重试"
+        s.items.isEmpty() -> "（空）"
+        s.totalCount != null ->
+            "第 ${s.pageIndex + 1}/${s.pageCount ?: (s.pageIndex + 1)} 页 · " +
+                "本页 ${s.items.size} 条 · 共 ${s.totalCount} 条"
+        else -> "第 ${s.pageIndex + 1} 页 · 本页 ${s.items.size} 条 · " +
+            "第 ${s.pageStart + 1}–${s.pageStart + s.items.size} 条"
+    }
+
     private fun showCollectDialog() {
         val dialogView = layoutInflater.inflate(R.layout.dialog_collect, null)
         val spMap = dialogView.findViewById<Spinner>(R.id.spCollectMap)
@@ -1333,6 +1363,11 @@ class MainActivity : AppCompatActivity() {
         val btnStop = dialogView.findViewById<Button>(R.id.btnCollectStop)
         val btnClose = dialogView.findViewById<Button>(R.id.btnCollectClose)
         val tvStatus = dialogView.findViewById<TextView>(R.id.tvCollectStatus)
+        val tvTitle = dialogView.findViewById<TextView>(R.id.tvCollectTitle)
+        val tvPageInfo = dialogView.findViewById<TextView>(R.id.tvCollectPageInfo)
+        val btnPrevPage = dialogView.findViewById<Button>(R.id.btnCollectPrevPage)
+        val btnNextPage = dialogView.findViewById<Button>(R.id.btnCollectNextPage)
+        val btnAllPages = dialogView.findViewById<Button>(R.id.btnCollectAllPages)
 
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
@@ -1346,6 +1381,21 @@ class MainActivity : AppCompatActivity() {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
         spMap.adapter = mapAdapter
+
+        // 分页状态 → 标题 / 页码 / 按钮 / Spinner
+        fun renderPage(state: FileListPager.State) {
+            runOnUiThread {
+                mapAdapter.clear()
+                mapAdapter.addAll(state.items)
+                mapAdapter.notifyDataSetChanged()
+                if (state.items.isNotEmpty()) spMap.setSelection(0)
+                tvTitle.text = buildListTitle("采点模式", state)
+                tvPageInfo.text = buildPageInfo(state)
+                btnPrevPage.isEnabled = state.hasPrev && !state.isLoading
+                btnNextPage.isEnabled = state.hasNext && !state.isLoading
+                btnAllPages.isEnabled = state.hasNext && !state.isLoading
+            }
+        }
 
         // 状态更新回调
         val updateUi = { state: ModeController.CollectState ->
@@ -1401,19 +1451,13 @@ class MainActivity : AppCompatActivity() {
         modeController.onCollectStateChanged = { state -> updateUi(state) }
         updateUi(modeController.collectState)
 
-        // 文件列表更新回调 → 刷新地图 Spinner
-        modeController.onFileListUpdated = {
-            runOnUiThread {
-                mapAdapter.clear()
-                mapAdapter.addAll(modeController.mapFileList)
-                mapAdapter.notifyDataSetChanged()
-                if (modeController.mapFileList.isNotEmpty()) {
-                    spMap.setSelection(0)
-                }
-            }
-        }
+        // 文件列表：手动翻页（每页一次请求，回退走缓存）
+        modeController.onFileListPageState = { state -> renderPage(state) }
+        btnPrevPage.setOnClickListener { modeController.prevPage() }
+        btnNextPage.setOnClickListener { modeController.nextPage() }
+        btnAllPages.setOnClickListener { modeController.loadAllPages() }
 
-        // 初始加载地图列表
+        // 初始加载第 1 页
         modeController.listMaps()
 
         // ── 按钮事件 ─────────────────────────────────────────
@@ -1481,6 +1525,11 @@ class MainActivity : AppCompatActivity() {
         val btnStart = dialogView.findViewById<Button>(R.id.btnCruiseStart)
         val btnClose = dialogView.findViewById<Button>(R.id.btnCruiseClose)
         val tvStatus = dialogView.findViewById<TextView>(R.id.tvCruiseStatus)
+        val tvTitle = dialogView.findViewById<TextView>(R.id.tvCruiseTitle)
+        val tvPageInfo = dialogView.findViewById<TextView>(R.id.tvCruisePageInfo)
+        val btnPrevPage = dialogView.findViewById<Button>(R.id.btnCruisePrevPage)
+        val btnNextPage = dialogView.findViewById<Button>(R.id.btnCruiseNextPage)
+        val btnAllPages = dialogView.findViewById<Button>(R.id.btnCruiseAllPages)
 
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
@@ -1503,19 +1552,28 @@ class MainActivity : AppCompatActivity() {
             modeController.listWaypoints()
         }
 
-        // 文件列表更新回调 → 刷新航线 Spinner
-        modeController.onFileListUpdated = {
+        // 分页状态 → 标题 / 页码 / 按钮 / Spinner
+        fun renderPage(state: FileListPager.State) {
             runOnUiThread {
                 wpAdapter.clear()
-                wpAdapter.addAll(modeController.waypointFileList)
+                wpAdapter.addAll(state.items)
                 wpAdapter.notifyDataSetChanged()
-                if (modeController.waypointFileList.isNotEmpty()) {
-                    spWp.setSelection(0)
-                }
+                if (state.items.isNotEmpty()) spWp.setSelection(0)
+                tvTitle.text = buildListTitle("巡航模式", state)
+                tvPageInfo.text = buildPageInfo(state)
+                btnPrevPage.isEnabled = state.hasPrev && !state.isLoading
+                btnNextPage.isEnabled = state.hasNext && !state.isLoading
+                btnAllPages.isEnabled = state.hasNext && !state.isLoading
             }
         }
 
-        // 初始加载航线列表
+        // 文件列表：手动翻页
+        modeController.onFileListPageState = { state -> renderPage(state) }
+        btnPrevPage.setOnClickListener { modeController.prevPage() }
+        btnNextPage.setOnClickListener { modeController.nextPage() }
+        btnAllPages.setOnClickListener { modeController.loadAllPages() }
+
+        // 初始加载第 1 页
         refreshWaypoints()
 
         btnRefreshWp.setOnClickListener { refreshWaypoints() }

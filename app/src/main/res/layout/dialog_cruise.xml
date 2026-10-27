@@ -14,6 +14,7 @@
         android:orientation="horizontal">
 
         <TextView
+            android:id="@+id/tvCruiseTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -159,6 +160,62 @@
             android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 分页导航：手动翻页 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnCruisePrevPage"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:backgroundTint="#555555"
+            android:enabled="false"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="上一页"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/tvCruisePageInfo"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="第 1 页"
+            android:textColor="#CCCCCC"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnCruiseNextPage"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:backgroundTint="#555555"
+            android:enabled="false"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="下一页"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnCruiseAllPages"
+            android:layout_width="wrap_content"
+            android:layout_height="34dp"
+            android:layout_marginStart="4dp"
+            android:backgroundTint="#1976D2"
+            android:enabled="false"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="全部"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
     </LinearLayout>
 
     <Button

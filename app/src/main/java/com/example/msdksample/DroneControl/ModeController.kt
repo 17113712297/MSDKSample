@@ -58,15 +58,12 @@ class ModeController {
 
         /** 单页回包超时（毫秒）。1 KB/s 带宽下 240 B 约 0.25 s，留足余量 */
         private const val PAGE_TIMEOUT_MS = 1500L
-
-        /** 同一页最多重试次数 */
-        private const val MAX_PAGE_RETRY = 2
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val pageAssembler = FileListPageAssembler()
+    private val pager = FileListPager()
     private var pageIsMap: Boolean = true
-    private var pageRetries: Int = 0
+    private var autoLoadUntilEnd: Boolean = false
     private val pageTimeoutRunnable = Runnable { onPageTimeout() }
 
     // ── 状态跟踪 ────────────────────────────────────────────
@@ -99,6 +96,9 @@ class ModeController {
     var onSettingsStateChanged: ((SettingsState) -> Unit)? = null
     var onLogMessage: ((String) -> Unit)? = null
     var onFileListUpdated: (() -> Unit)? = null
+
+    /** 分页状态回调（手动翻页 UI 用）：当前页条目、页码、是否还有上/下一页等 */
+    var onFileListPageState: ((FileListPager.State) -> Unit)? = null
     var onSettingsResponse: ((Map<String, String>) -> Unit)? = null  // 设置配置回读
 
     // ============================================================
@@ -136,25 +136,62 @@ class ModeController {
     }
 
     fun listMaps() {
-        requestFirstPage(isMap = true)
+        startPaging(isMap = true)
     }
 
     fun listWaypoints() {
-        requestFirstPage(isMap = false)
+        startPaging(isMap = false)
     }
 
     // ============================================================
-    //  文件列表分页
+    //  文件列表分页（手动翻页）
     // ============================================================
+    //
+    // 每次只取一页：打开对话框取第 1 页；用户点"下一页"才取第 2 页；
+    // 已经取过的页直接从缓存切（不再发请求）。"全部"按钮才连续取到末页。
+    //
+    // 协议没有 total 字段，所以"共 N 条 / 共 y 页"只有走到末页后才知道。
 
-    private fun requestFirstPage(isMap: Boolean) {
+    /** 开始一轮新的拉取（第 1 页） */
+    private fun startPaging(isMap: Boolean) {
         pageIsMap = isMap
-        pageRetries = 0
-        pageAssembler.start()
+        autoLoadUntilEnd = false
         mainHandler.removeCallbacks(pageTimeoutRunnable)
-        Log.i(TAG, "请求文件列表第 0 页 (${if (isMap) "map" else "wp"})")
-        sendPageRequest(0, isMap)
+        val offset = pager.begin(isMap)
+        Log.i(TAG, "请求文件列表第 1 页 (${if (isMap) "map" else "wp"}, offset=$offset)")
+        sendPageRequest(offset, isMap)
         armPageTimeout()
+        emitPageState()
+    }
+
+    /** 下一页（已缓存则直接切，否则发请求） */
+    fun nextPage() = navigate { pager.next() }
+
+    /** 上一页（只走缓存） */
+    fun prevPage() = navigate { pager.prev() }
+
+    /** 超时后重试当前页 */
+    fun retryPage() = navigate { pager.retry() }
+
+    /** 连续取到末页（"全部"按钮） */
+    fun loadAllPages() {
+        if (pager.isLoading) return
+        autoLoadUntilEnd = true
+        navigate { pager.next() }
+    }
+
+    private fun navigate(action: () -> FileListPager.Nav) {
+        if (pager.isLoading) return
+        when (action()) {
+            FileListPager.Nav.FETCH -> {
+                mainHandler.removeCallbacks(pageTimeoutRunnable)
+                Log.i(TAG, "请求第 ${pager.state().pageIndex + 2} 页 offset=${pager.pendingOffset}")
+                sendPageRequest(pager.pendingOffset, pageIsMap)
+                armPageTimeout()
+                emitPageState()
+            }
+            FileListPager.Nav.CACHED, FileListPager.Nav.NONE -> emitPageState()
+        }
     }
 
     private fun sendPageRequest(offset: Int, isMap: Boolean) {
@@ -172,58 +209,39 @@ class ModeController {
      * 机载分页回包（0x94 / 0x95）→ 由 DroneControlService 调用（主线程）。
      */
     fun onFileListPage(offset: Int, nextOffset: Int, names: List<String>, isMap: Boolean) {
-        if (!pageAssembler.isActive) {
-            Log.w(TAG, "忽略无请求的分页回包 offset=$offset isMap=$isMap")
-            return
-        }
         if (isMap != pageIsMap) {
             Log.w(TAG, "忽略类型不符的分页回包 isMap=$isMap 期望=$pageIsMap")
             return
         }
+        if (!pager.onPage(offset, nextOffset, names)) {
+            Log.w(TAG, "忽略异常分页回包 offset=$offset next=$nextOffset " +
+                    "pending=${pager.pendingOffset} loading=${pager.isLoading}")
+            return
+        }
 
-        when (pageAssembler.onPage(offset, nextOffset, names)) {
-            FileListPageAssembler.Action.IGNORE -> {
-                // 重复页 / 乱序页：不推进，等超时重试当前页
-                Log.w(TAG, "忽略异常分页回包 offset=$offset next=$nextOffset " +
-                        "期望=$pageAssembler.expectedOffset")
-            }
-            FileListPageAssembler.Action.NEXT -> {
-                pageRetries = 0
-                Log.i(TAG, "收到第 $offset 页 ${names.size} 条，继续请求 ${pageAssembler.expectedOffset}")
-                sendPageRequest(pageAssembler.expectedOffset, isMap)
-                armPageTimeout()
-            }
-            FileListPageAssembler.Action.COMPLETE -> {
-                publishFileList(pageAssembler.collected, isMap, partial = false)
-            }
+        mainHandler.removeCallbacks(pageTimeoutRunnable)
+        Log.i(TAG, "收到第 ${offset} 页 ${names.size} 条 next=$nextOffset")
+        emitPageState()
+        if (autoLoadUntilEnd) {
+            if (pager.state().hasNext) navigate { pager.next() }
+            else autoLoadUntilEnd = false
         }
     }
 
     private fun onPageTimeout() {
-        if (!pageAssembler.isActive) return
-        if (pageRetries < MAX_PAGE_RETRY) {
-            pageRetries++
-            Log.w(TAG, "第 ${pageAssembler.expectedOffset} 页超时，" +
-                    "重试 $pageRetries/$MAX_PAGE_RETRY")
-            sendPageRequest(pageAssembler.expectedOffset, pageIsMap)
-            armPageTimeout()
-        } else {
-            Log.e(TAG, "第 ${pageAssembler.expectedOffset} 页重试耗尽，返回已收到的 " +
-                    "${pageAssembler.collected.size} 条")
-            publishFileList(pageAssembler.collected, pageIsMap, partial = true)
-        }
+        if (!pager.onTimeout()) return
+        autoLoadUntilEnd = false
+        Log.w(TAG, "第 ${pager.state().pageIndex + 1} 页超时，等用户重试")
+        emitPageState()
     }
 
-    private fun publishFileList(files: List<String>, isMap: Boolean, partial: Boolean) {
-        pageAssembler.cancel()
-        mainHandler.removeCallbacks(pageTimeoutRunnable)
-        val cleaned = files.distinct()
-        if (isMap) mapFileList = cleaned else waypointFileList = cleaned
-        Log.i(TAG, "文件列表就绪: ${cleaned.size} 条 (isMap=$isMap partial=$partial)")
-        if (partial) {
-            onLogMessage?.invoke("列表未加载完整（已收到 ${cleaned.size} 条），请重试")
+    private fun emitPageState() {
+        val state = pager.state()
+        if (state.isMap) mapFileList = state.items else waypointFileList = state.items
+        mainHandler.post {
+            onFileListPageState?.invoke(state)
+            onFileListUpdated?.invoke()
         }
-        onFileListUpdated?.invoke()
     }
 
     // ============================================================
@@ -550,10 +568,12 @@ class ModeController {
      * 想要完整列表必须升级机载到支持 0x94/0x95 分页的版本。
      */
     fun onFileListResponse(fileList: String, isMap: Boolean) {
-        pageAssembler.cancel()
         mainHandler.removeCallbacks(pageTimeoutRunnable)
+        autoLoadUntilEnd = false
+        pageIsMap = isMap
         Log.w(TAG, "收到旧格式列表（不分页，可能被截断）: ${fileList.length}B isMap=$isMap")
         val files = fileList.split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }
-        publishFileList(files, isMap, partial = false)
+        pager.onLegacy(files.distinct())
+        emitPageState()
     }
 }

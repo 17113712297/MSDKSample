@@ -252,7 +252,7 @@ object DroneCommProtocol {
      * 老固件会忽略这 2 字节，仍回旧格式 0x90/0x91 —— 遥控器两条路径都支持。
      */
     fun encodeListRequest(cmd: Byte, offset: Int): ByteArray {
-        val safe = offset.coerceIn(0, FileListPageAssembler.NO_MORE - 1)
+        val safe = offset.coerceIn(0, FileListPager.NO_MORE - 1)
         return encodePayload(cmd, byteArrayOf(
             (safe and 0xFF).toByte(),
             ((safe shr 8) and 0xFF).toByte()
