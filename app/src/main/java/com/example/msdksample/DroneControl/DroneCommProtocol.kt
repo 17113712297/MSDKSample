@@ -171,9 +171,21 @@ object DroneCommProtocol {
     // ═══════════════════════════════════════════════════════
 // ★ 响应指令 (0x90-0x92，Jetson → Android)
 // ═══════════════════════════════════════════════════════
-    const val CMD_FILE_LIST_RESPONSE:   Byte = 0x90.toByte()  // 地图文件列表响应
-    const val CMD_FILE_LIST_RESPONSE_WP: Byte = 0x91.toByte()  // 航线文件列表响应
+    const val CMD_FILE_LIST_RESPONSE:   Byte = 0x90.toByte()  // 地图文件列表响应（旧格式，无分页）
+    const val CMD_FILE_LIST_RESPONSE_WP: Byte = 0x91.toByte()  // 航线文件列表响应（旧格式，无分页）
     const val CMD_SETTINGS_RESPONSE:     Byte = 0x92.toByte()  // 设置参数响应
+
+    // ═══════════════════════════════════════════════════════
+    // ★ 文件列表分页（0x64/0x6E 请求，0x94/0x95 回包）
+    //   请求 payload: [offset:u16 LE]  —— 已收到的条数
+    //   回包 payload: [offset:u16][next:u16][name\nname\n...]
+    //   next == 0xFFFF 表示没有下一页
+    //   请求不带 payload 时（老固件/老 App）仍回旧格式 0x90/0x91
+    // ═══════════════════════════════════════════════════════
+    const val CMD_FILE_LIST_PAGE:    Byte = 0x94.toByte()  // 地图文件列表（分页）
+    const val CMD_FILE_LIST_PAGE_WP: Byte = 0x95.toByte()  // 航线文件列表（分页）
+    const val FILE_LIST_PAGE_HEADER_LEN = 4
+    const val FILE_LIST_NO_MORE = 0xFFFF
     /**
      * 机载状态机状态码。
      *
@@ -231,6 +243,38 @@ object DroneCommProtocol {
 
         val payload = data.copyOfRange(3, 3 + payloadLen)
         return ParsedFrame(valid = true, cmd = data[1], payload = payload)
+    }
+
+    /**
+     * 编码文件列表分页请求：payload = [offset:u16 LE]。
+     *
+     * 带这 2 字节 = 告诉机载"请按分页格式回"；机载按 offset 切片。
+     * 老固件会忽略这 2 字节，仍回旧格式 0x90/0x91 —— 遥控器两条路径都支持。
+     */
+    fun encodeListRequest(cmd: Byte, offset: Int): ByteArray {
+        val safe = offset.coerceIn(0, FileListPageAssembler.NO_MORE - 1)
+        return encodePayload(cmd, byteArrayOf(
+            (safe and 0xFF).toByte(),
+            ((safe shr 8) and 0xFF).toByte()
+        ))
+    }
+
+    /**
+     * 解析文件列表分页回包（0x94 / 0x95）。
+     * payload: [offset:u16][next:u16][name\nname\n...]
+     */
+    fun parseFileListPage(payload: ByteArray): FileListPagePayload? {
+        if (payload.size < FILE_LIST_PAGE_HEADER_LEN) return null
+        val offset = (payload[0].toInt() and 0xFF) or ((payload[1].toInt() and 0xFF) shl 8)
+        val next = (payload[2].toInt() and 0xFF) or ((payload[3].toInt() and 0xFF) shl 8)
+        val text = String(
+            payload,
+            FILE_LIST_PAGE_HEADER_LEN,
+            payload.size - FILE_LIST_PAGE_HEADER_LEN,
+            Charsets.UTF_8
+        )
+        val names = text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        return FileListPagePayload(offset = offset, nextOffset = next, names = names)
     }
 
     fun parseVelPayload(payload: ByteArray): VelPayload? {
@@ -431,6 +475,15 @@ object DroneCommProtocol {
         val stateName: String get() = MissionState.name(state)
         val progressText: String
             get() = if (wpTotal > 0) "$wpIndex/$wpTotal" else "-"
+    }
+
+    /** 文件列表分页：本页起始索引、下一页索引、本页文件名 */
+    data class FileListPagePayload(
+        val offset:     Int,
+        val nextOffset: Int,
+        val names:      List<String>
+    ) {
+        val isLastPage: Boolean get() = nextOffset == FILE_LIST_NO_MORE
     }
 
 }

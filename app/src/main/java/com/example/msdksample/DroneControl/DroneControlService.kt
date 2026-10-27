@@ -100,17 +100,31 @@ class DroneControlService : Service() {
     private val landingCommandPending = AtomicBoolean(false)
     @Volatile private var nextRetryDelayMs = REG_RETRY_BASE_MS
 
+    /**
+     * 帧重组器。
+     *
+     * PSDK 低速通道物理包上限 128 B（见 `dji_low_speed_data_channel.h`），
+     * 超过就会被 SDK 拆成多次回调。这里先把分片攒回整帧再分发，
+     * 否则 0x90/0x91（文件列表）这类长帧会被整条丢弃。
+     */
+    private val frameAssembler = DroneFrameAssembler()
+
     private val payloadDataListener = PayloadDataListener { bytes ->
         if (bytes == null || bytes.isEmpty()) return@PayloadDataListener
 
-        val frame = DroneCommProtocol.decode(bytes)
-        if (!frame.valid) {
-            Log.w(TAG, "帧校验失败，丢弃")
-            return@PayloadDataListener
+        // 一次回调可能是：一个整帧 / 一帧的前半 / 一帧的后半 / 好几帧粘在一起
+        val frames = frameAssembler.feed(bytes)
+        if (frames.isEmpty() && frameAssembler.pendingBytes == 0) {
+            // 有数据但一个字都没留下 → 说明整段既不是半包也凑不成合法帧（真·坏帧）
+            Log.w(TAG, "丢弃 ${bytes.size}B 无效数据（无合法帧头或校验失败）")
         }
-
-        Log.i(TAG, "CMD=0x${frame.cmd.toUByte().toString(16).uppercase()}")
-        dispatchFrame(frame)
+        for (frame in frames) {
+            Log.i(
+                TAG,
+                "CMD=0x${frame.cmd.toUByte().toString(16).uppercase()} len=${frame.payload.size}"
+            )
+            dispatchFrame(frame)
+        }
     }
 
     // ── 生命周期 ──────────────────────────────────────────
@@ -456,20 +470,21 @@ class DroneControlService : Service() {
 
             // ── ★ 文件列表响应 ─────────────────────────────────
             DroneCommProtocol.CMD_FILE_LIST_RESPONSE -> {
-                val fileList = String(frame.payload, Charsets.UTF_8)
-                Log.i(TAG, "MAP FILE_LIST_RESPONSE: $fileList")
-                mainHandler.post {
-                    modeController?.onFileListResponse(fileList, isMap = true)
-                }
+                deliverFileList(frame.payload, isMap = true)
             }
 
             // ── ★ 航线文件列表响应 ────────────────────────────
             DroneCommProtocol.CMD_FILE_LIST_RESPONSE_WP -> {
-                val fileList = String(frame.payload, Charsets.UTF_8)
-                Log.i(TAG, "WP FILE_LIST_RESPONSE: $fileList")
-                mainHandler.post {
-                    modeController?.onFileListResponse(fileList, isMap = false)
-                }
+                deliverFileList(frame.payload, isMap = false)
+            }
+
+            // ── ★ 文件列表分页响应（0x94 / 0x95）───────────────
+            DroneCommProtocol.CMD_FILE_LIST_PAGE -> {
+                deliverFileListPage(frame.payload, isMap = true)
+            }
+
+            DroneCommProtocol.CMD_FILE_LIST_PAGE_WP -> {
+                deliverFileListPage(frame.payload, isMap = false)
             }
 
             // ── ★ 设置配置响应 ─────────────────────────────────
@@ -487,6 +502,56 @@ class DroneControlService : Service() {
     private fun ackOf(ok: Boolean): Byte =
         if (ok) DroneCommProtocol.ACK_OK else DroneCommProtocol.ACK_FAIL
 
+    /**
+     * 文件列表回包（0x90 / 0x91）的统一处理。
+     *
+     * 机载侧 `controller_hardware` 打包时做了
+     * `resp_len = min(resp_msg.size(), 240)` —— **超过 240 字节会被静默截断**，
+     * 截断点通常落在最后一个文件名中间。这里把那半个名字丢掉并打明确日志，
+     * 避免遥控器上出现一个"看起来存在、点了却失败"的幽灵条目。
+     *
+     * 判据用 `>= 240`：正好 240 且恰好完整的概率极低，宁可少一条也不要坏一条。
+     */
+    private fun deliverFileList(payload: ByteArray, isMap: Boolean) {
+        val tag = if (isMap) "MAP" else "WP"
+        var text = String(payload, Charsets.UTF_8)
+        if (payload.size >= 240) {
+            val cut = text.lastIndexOf(',')
+            text = if (cut >= 0) text.substring(0, cut) else ""
+            Log.w(
+                TAG,
+                "$tag FILE_LIST 被机载截断（payload=${payload.size}B，上限 240B），" +
+                    "已丢弃最后一个不完整文件名；请减少该目录文件数或缩短文件名"
+            )
+        }
+        Log.i(TAG, "$tag FILE_LIST_RESPONSE(${text.length}B): $text")
+        mainHandler.post {
+            modeController?.onFileListResponse(text, isMap = isMap)
+        }
+    }
+
+    /**
+     * 文件列表分页回包（0x94 / 0x95）。
+     * payload: [offset:u16][next:u16][name\nname\n...]
+     * 逐页交给 ModeController 累计，这里只做解析与日志。
+     */
+    private fun deliverFileListPage(payload: ByteArray, isMap: Boolean) {
+        val page = DroneCommProtocol.parseFileListPage(payload)
+        if (page == null) {
+            Log.w(TAG, "分页列表解析失败 (payload=${payload.size}B)")
+            return
+        }
+        val tag = if (isMap) "MAP" else "WP"
+        Log.i(
+            TAG,
+            "$tag LIST_PAGE offset=${page.offset} next=${page.nextOffset} " +
+                "count=${page.names.size} last=${page.isLastPage}"
+        )
+        mainHandler.post {
+            modeController?.onFileListPage(page.offset, page.nextOffset, page.names, isMap)
+        }
+    }
+
     private fun scheduleRegisterPayloadListener(immediate: Boolean) {
         val delay = if (immediate) 0L else nextRetryDelayMs
         mainHandler.postDelayed({ tryRegisterPayloadListener() }, delay)
@@ -503,6 +568,7 @@ class DroneControlService : Service() {
         }
 
         if (mgr != null) {
+            frameAssembler.reset()   // 重连后从干净的缓冲开始
             mgr.addPayloadDataListener(payloadDataListener)
             listenerRegistered.set(true)
             nextRetryDelayMs = REG_RETRY_BASE_MS
@@ -525,6 +591,8 @@ class DroneControlService : Service() {
             Log.w(TAG, "removePayloadDataListener 异常: ${e.message}")
         }
         listenerRegistered.set(false)
+        // 断链后残留的半帧不能带到下一次连接里
+        frameAssembler.reset()
     }
 
     private fun sendAck(ackedCmd: Byte, status: Byte) {

@@ -1,5 +1,7 @@
 package com.example.msdksample
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 
 /**
@@ -7,6 +9,18 @@ import android.util.Log
  *
  * 管理建图/采点/巡航三种模式的指令发送和状态跟踪。
  * 所有指令通过 PSDK 低速通道发送到 Jetson ROS 端。
+ *
+ * ── 文件列表改为分页拉取 ──────────────────────────────────────────
+ * 机载一次只能回 240 B 文本（PSDK 低速通道单帧 payload 上限），
+ * 文件一多就被截断。现在改成：
+ *
+ *   1. 发 0x64 / 0x6E，payload = [offset:u16]（offset=0 表示第一页）；
+ *   2. 机载回 0x94 / 0x95，payload = [offset][next][name\nname...]；
+ *   3. next != 0xFFFF 就继续按 next 请求下一页，直到收齐；
+ *   4. 每页 1.5 s 超时，最多重试 2 次，超时后把已收到的部分交出去。
+ *
+ * 老固件会忽略请求里的 offset，仍回旧的 0x90/0x91 单帧格式，
+ * 这时走 [onFileListResponse] 的兼容路径。
  */
 class ModeController {
 
@@ -41,7 +55,19 @@ class ModeController {
 
     companion object {
         private const val TAG = "ModeController"
+
+        /** 单页回包超时（毫秒）。1 KB/s 带宽下 240 B 约 0.25 s，留足余量 */
+        private const val PAGE_TIMEOUT_MS = 1500L
+
+        /** 同一页最多重试次数 */
+        private const val MAX_PAGE_RETRY = 2
     }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pageAssembler = FileListPageAssembler()
+    private var pageIsMap: Boolean = true
+    private var pageRetries: Int = 0
+    private val pageTimeoutRunnable = Runnable { onPageTimeout() }
 
     // ── 状态跟踪 ────────────────────────────────────────────
     @Volatile
@@ -110,15 +136,94 @@ class ModeController {
     }
 
     fun listMaps() {
-        val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_LIST_MAPS)
-        DroneControlService.sendFrame(frame)
-        Log.i(TAG, "listMaps")
+        requestFirstPage(isMap = true)
     }
 
     fun listWaypoints() {
-        val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_LIST_WAYPOINTS)
-        DroneControlService.sendFrame(frame)
-        Log.i(TAG, "listWaypoints")
+        requestFirstPage(isMap = false)
+    }
+
+    // ============================================================
+    //  文件列表分页
+    // ============================================================
+
+    private fun requestFirstPage(isMap: Boolean) {
+        pageIsMap = isMap
+        pageRetries = 0
+        pageAssembler.start()
+        mainHandler.removeCallbacks(pageTimeoutRunnable)
+        Log.i(TAG, "请求文件列表第 0 页 (${if (isMap) "map" else "wp"})")
+        sendPageRequest(0, isMap)
+        armPageTimeout()
+    }
+
+    private fun sendPageRequest(offset: Int, isMap: Boolean) {
+        val cmd = if (isMap) DroneCommProtocol.CMD_LIST_MAPS
+                  else DroneCommProtocol.CMD_LIST_WAYPOINTS
+        DroneControlService.sendFrame(DroneCommProtocol.encodeListRequest(cmd, offset))
+    }
+
+    private fun armPageTimeout() {
+        mainHandler.removeCallbacks(pageTimeoutRunnable)
+        mainHandler.postDelayed(pageTimeoutRunnable, PAGE_TIMEOUT_MS)
+    }
+
+    /**
+     * 机载分页回包（0x94 / 0x95）→ 由 DroneControlService 调用（主线程）。
+     */
+    fun onFileListPage(offset: Int, nextOffset: Int, names: List<String>, isMap: Boolean) {
+        if (!pageAssembler.isActive) {
+            Log.w(TAG, "忽略无请求的分页回包 offset=$offset isMap=$isMap")
+            return
+        }
+        if (isMap != pageIsMap) {
+            Log.w(TAG, "忽略类型不符的分页回包 isMap=$isMap 期望=$pageIsMap")
+            return
+        }
+
+        when (pageAssembler.onPage(offset, nextOffset, names)) {
+            FileListPageAssembler.Action.IGNORE -> {
+                // 重复页 / 乱序页：不推进，等超时重试当前页
+                Log.w(TAG, "忽略异常分页回包 offset=$offset next=$nextOffset " +
+                        "期望=$pageAssembler.expectedOffset")
+            }
+            FileListPageAssembler.Action.NEXT -> {
+                pageRetries = 0
+                Log.i(TAG, "收到第 $offset 页 ${names.size} 条，继续请求 ${pageAssembler.expectedOffset}")
+                sendPageRequest(pageAssembler.expectedOffset, isMap)
+                armPageTimeout()
+            }
+            FileListPageAssembler.Action.COMPLETE -> {
+                publishFileList(pageAssembler.collected, isMap, partial = false)
+            }
+        }
+    }
+
+    private fun onPageTimeout() {
+        if (!pageAssembler.isActive) return
+        if (pageRetries < MAX_PAGE_RETRY) {
+            pageRetries++
+            Log.w(TAG, "第 ${pageAssembler.expectedOffset} 页超时，" +
+                    "重试 $pageRetries/$MAX_PAGE_RETRY")
+            sendPageRequest(pageAssembler.expectedOffset, pageIsMap)
+            armPageTimeout()
+        } else {
+            Log.e(TAG, "第 ${pageAssembler.expectedOffset} 页重试耗尽，返回已收到的 " +
+                    "${pageAssembler.collected.size} 条")
+            publishFileList(pageAssembler.collected, pageIsMap, partial = true)
+        }
+    }
+
+    private fun publishFileList(files: List<String>, isMap: Boolean, partial: Boolean) {
+        pageAssembler.cancel()
+        mainHandler.removeCallbacks(pageTimeoutRunnable)
+        val cleaned = files.distinct()
+        if (isMap) mapFileList = cleaned else waypointFileList = cleaned
+        Log.i(TAG, "文件列表就绪: ${cleaned.size} 条 (isMap=$isMap partial=$partial)")
+        if (partial) {
+            onLogMessage?.invoke("列表未加载完整（已收到 ${cleaned.size} 条），请重试")
+        }
+        onFileListUpdated?.invoke()
     }
 
     // ============================================================
@@ -437,14 +542,18 @@ class ModeController {
         }
     }
 
+    /**
+     * 旧格式文件列表（0x90 / 0x91）——老固件不认识分页请求时会走这里。
+     *
+     * 注意：这种单帧最多 240 B，文件多时**本身就是截断的**，
+     * 只能显示前若干条（遥控器侧已在 Service 里丢掉半个文件名）。
+     * 想要完整列表必须升级机载到支持 0x94/0x95 分页的版本。
+     */
     fun onFileListResponse(fileList: String, isMap: Boolean) {
-        Log.i(TAG, "onFileListResponse: $fileList isMap=$isMap")
-        val files = fileList.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        if (isMap) {
-            mapFileList = files
-        } else {
-            waypointFileList = files
-        }
-        onFileListUpdated?.invoke()
+        pageAssembler.cancel()
+        mainHandler.removeCallbacks(pageTimeoutRunnable)
+        Log.w(TAG, "收到旧格式列表（不分页，可能被截断）: ${fileList.length}B isMap=$isMap")
+        val files = fileList.split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }
+        publishFileList(files, isMap, partial = false)
     }
 }
