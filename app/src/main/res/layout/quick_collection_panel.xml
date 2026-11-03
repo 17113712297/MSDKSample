@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/quickCollectionPanel"
+    android:layout_width="224dp"
+    android:layout_height="wrap_content"
+    android:layout_gravity="end|bottom"
+    android:layout_marginTop="100dp"
+    android:layout_marginEnd="12dp"
+    android:layout_marginBottom="64dp"
+    android:background="@drawable/bg_dashboard_panel"
+    android:clickable="true"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:visibility="gone">
+
+    <!-- 高度受限时仅压缩内容区，结束按钮保持在可见区域。 -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="false">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="采点作业"
+                android:textColor="#F0F6FF"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/quickCollectionStatus"
+                style="@style/DashboardHint"
+                android:layout_marginTop="4dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:text="正在采点"
+                android:textColor="#5DE4AE" />
+
+            <androidx.appcompat.widget.AppCompatButton
+                android:id="@+id/btnQuickRecordWaypoint"
+                style="@style/DashboardButton"
+                android:layout_height="48dp"
+                android:backgroundTint="#2765B2"
+                android:text="记录航点"
+                android:textSize="15sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <androidx.appcompat.widget.AppCompatButton
+                    android:id="@+id/btnQuickSaveWaypoints"
+                    style="@style/DashboardButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="6dp"
+                    android:layout_marginEnd="3dp"
+                    android:layout_weight="1"
+                    android:text="保存航线"
+                    android:textSize="12sp" />
+
+                <androidx.appcompat.widget.AppCompatButton
+                    android:id="@+id/btnQuickClearWaypoints"
+                    style="@style/DashboardButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_marginStart="3dp"
+                    android:layout_marginTop="6dp"
+                    android:layout_weight="1"
+                    android:text="清空航点"
+                    android:textColor="#FFB5A6"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+
+    <androidx.appcompat.widget.AppCompatButton
+        android:id="@+id/btnQuickFinishCollect"
+        style="@style/DashboardButton"
+        android:layout_height="44dp"
+        android:layout_marginTop="6dp"
+        android:text="结束采点"
+        android:textColor="#F4CE7C" />
+</LinearLayout>

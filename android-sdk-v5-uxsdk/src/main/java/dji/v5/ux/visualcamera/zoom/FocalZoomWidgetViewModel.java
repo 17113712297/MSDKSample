@@ -46,6 +46,8 @@ class FocalZoomWidgetViewModel extends WidgetModel implements ICameraIndex {
     private final DataProcessor<ZoomRatiosRange> visibleFocalZoomRatiosRange =  DataProcessor.create(new ZoomRatiosRange());
     private final DataProcessor<ZoomRatiosRange> thermalFocalZoomRatiosRange =  DataProcessor.create(new ZoomRatiosRange());
     private long mSendFocusDistanceTime = 0;
+    private volatile long sourceGeneration;
+    private boolean setupActive;
 
     public FocalZoomWidgetViewModel(@NonNull DJISDKModel djiSdkModel, @NonNull ObservableInMemoryKeyedStore uxKeyManager) {
         super(djiSdkModel, uxKeyManager);
@@ -53,31 +55,33 @@ class FocalZoomWidgetViewModel extends WidgetModel implements ICameraIndex {
 
     @Override
     protected void inSetup() {
+        setupActive = true;
+        final long generation = sourceGeneration;
         initSendFocalLengthObservable();
         //SDK在Key做过了区分，所以这里直接用
         cameraZoomRatiosKey = KeyTools.createCameraKey(CameraKey.KeyCameraZoomRatios, cameraIndex, CameraLensType.CAMERA_LENS_ZOOM);
         thermalZoomRatiosKey = KeyTools.createCameraKey(CameraKey.KeyThermalZoomRatios, cameraIndex, CameraLensType.CAMERA_LENS_THERMAL);
         bindDataProcessor(cameraZoomRatiosKey, visibleFocalZoomRatios, ratios -> {
-            if (lensType == CameraLensType.CAMERA_LENS_ZOOM) {
+            if (generation == sourceGeneration && lensType == CameraLensType.CAMERA_LENS_ZOOM) {
                 focalZoomRatios.onNext(ratios);
             }
         });
         bindDataProcessor(thermalZoomRatiosKey, thermalFocalZoomRatios, ratios -> {
-            if (lensType == CameraLensType.CAMERA_LENS_THERMAL) {
+            if (generation == sourceGeneration && lensType == CameraLensType.CAMERA_LENS_THERMAL) {
                 focalZoomRatios.onNext(ratios);
             }
         });
 
         cameraZoomRatiosRangeKey = KeyTools.createCameraKey(CameraKey.KeyCameraZoomRatiosRange, cameraIndex, CameraLensType.CAMERA_LENS_ZOOM);
-        thermalZoomRatiosRangeKey = KeyTools.createCameraKey(CameraKey.KeyThermalZoomRatiosRange, cameraIndex, CameraLensType.CAMERA_LENS_ZOOM);
+        thermalZoomRatiosRangeKey = KeyTools.createCameraKey(CameraKey.KeyThermalZoomRatiosRange, cameraIndex, CameraLensType.CAMERA_LENS_THERMAL);
 
         bindDataProcessor(cameraZoomRatiosRangeKey, visibleFocalZoomRatiosRange, range -> {
-            if (lensType == CameraLensType.CAMERA_LENS_ZOOM) {
+            if (generation == sourceGeneration && lensType == CameraLensType.CAMERA_LENS_ZOOM) {
                 focalZoomRatiosRange.onNext(range);
             }
         });
         bindDataProcessor(thermalZoomRatiosRangeKey, thermalFocalZoomRatiosRange, range -> {
-            if (lensType == CameraLensType.CAMERA_LENS_THERMAL) {
+            if (generation == sourceGeneration && lensType == CameraLensType.CAMERA_LENS_THERMAL) {
                 focalZoomRatiosRange.onNext(range);
             }
         });
@@ -85,7 +89,9 @@ class FocalZoomWidgetViewModel extends WidgetModel implements ICameraIndex {
 
     @Override
     protected void inCleanup() {
-        //do nothig
+        setupActive = false;
+        sourceGeneration++;
+        mSendFocalLengthEmitter = null;
     }
 
     @NonNull
@@ -101,24 +107,35 @@ class FocalZoomWidgetViewModel extends WidgetModel implements ICameraIndex {
     }
 
     @Override
-    public void updateCameraSource(@NonNull ComponentIndexType cameraIndex, @NonNull CameraLensType lensType) {
+    public synchronized void updateCameraSource(@NonNull ComponentIndexType cameraIndex, @NonNull CameraLensType lensType) {
+        final boolean started = setupActive;
+        if (started) cleanup();
         this.cameraIndex = cameraIndex;
         this.lensType = lensType;
-        restart();
+        // A new camera/lens must not replay the old lens's ratio and gear range as if they were current.
+        focalZoomRatios.onNext(0D);
+        focalZoomRatiosRange.onNext(new ZoomRatiosRange());
+        visibleFocalZoomRatios.onNext(0D);
+        thermalFocalZoomRatios.onNext(0D);
+        visibleFocalZoomRatiosRange.onNext(new ZoomRatiosRange());
+        thermalFocalZoomRatiosRange.onNext(new ZoomRatiosRange());
+        mSendFocusDistanceTime = 0;
+        if (started) setup();
     }
 
     private void initSendFocalLengthObservable() {
+        final long generation = sourceGeneration;
         Disposable disposable = Observable.<Double>create(emitter -> mSendFocalLengthEmitter = emitter)
                 .filter((value) -> {
                     if (SystemClock.uptimeMillis() - mSendFocusDistanceTime > SAMPLE_TIME) {
-                        sendFocusDistance(value);
+                        sendFocusDistance(generation, value);
                         return false;
                     } else {
                         return true;
                     }
                 })
                 .throttleLast(SAMPLE_TIME, TimeUnit.MILLISECONDS)
-                .subscribe(this::sendFocusDistance);
+                .subscribe(value -> sendFocusDistance(generation, value));
         addDisposable(disposable);
     }
 
@@ -128,7 +145,8 @@ class FocalZoomWidgetViewModel extends WidgetModel implements ICameraIndex {
         }
     }
 
-    private void sendFocusDistance(double value) {
+    private synchronized void sendFocusDistance(long generation, double value) {
+        if (generation != sourceGeneration || Double.isNaN(value) || Double.isInfinite(value) || value <= 0) return;
         mSendFocusDistanceTime = SystemClock.uptimeMillis();
         if (lensType == CameraLensType.CAMERA_LENS_ZOOM) {
             KeyManager.getInstance().setValue(cameraZoomRatiosKey, value, null);

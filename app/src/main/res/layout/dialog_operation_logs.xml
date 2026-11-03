@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="14dp" android:background="#1A1A1E">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:text="操作日志" android:textStyle="bold" android:textSize="18sp" android:textColor="#FFFFFF" />
+        <Button android:id="@+id/btnLogsRefresh" android:layout_width="76dp" android:layout_height="42dp"
+            android:text="刷新" android:textSize="12sp" android:textColor="#FFFFFF" android:backgroundTint="#2F80ED" />
+        <Button android:id="@+id/btnLogsDelete" android:layout_width="104dp" android:layout_height="42dp"
+            android:text="删除本份" android:textSize="12sp" android:textColor="#FFFFFF" android:backgroundTint="#C57930" />
+        <Button android:id="@+id/btnLogsClear" android:layout_width="104dp" android:layout_height="42dp"
+            android:text="清空全部" android:textSize="12sp" android:textColor="#FFFFFF" android:backgroundTint="#B83D3D" />
+        <Button android:id="@+id/btnLogsClose" android:layout_width="76dp" android:layout_height="42dp"
+            android:text="关闭" android:textSize="12sp" android:textColor="#FFFFFF" android:backgroundTint="#4F5560" />
+    </LinearLayout>
+
+    <Spinner android:id="@+id/spLogsFiles" android:layout_width="match_parent" android:layout_height="42dp"
+        android:spinnerMode="dropdown" android:backgroundTint="#B3FFFFFF" android:contentDescription="选择日志日期和分卷" />
+
+    <TextView android:id="@+id/tvLogsInfo" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingTop="4dp" android:paddingBottom="6dp" android:text="正在读取日志…"
+        android:textSize="12sp" android:textColor="#BCC4CE" />
+
+    <ScrollView android:id="@+id/scrollLogsContent" android:layout_width="match_parent" android:layout_height="0dp"
+        android:layout_weight="1" android:fillViewport="true" android:background="#101115" android:padding="10dp">
+        <TextView android:id="@+id/tvLogsContent" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:textColor="#E3E8EE" android:textSize="12sp" android:fontFamily="monospace"
+            android:textIsSelectable="true" android:lineSpacingExtra="3dp" />
+    </ScrollView>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical">
+        <Button android:id="@+id/btnLogsOlder" android:layout_width="96dp" android:layout_height="42dp"
+            android:text="更早一页" android:textSize="12sp" android:textColor="#FFFFFF" android:backgroundTint="#4F5560" />
+        <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:gravity="center" android:text="自动保存 · 超出容量后清理最早记录"
+            android:textColor="#9AA4B2" android:textSize="11sp" />
+        <Button android:id="@+id/btnLogsNewer" android:layout_width="96dp" android:layout_height="42dp"
+            android:text="更新一页" android:textSize="12sp" android:textColor="#FFFFFF" android:backgroundTint="#4F5560" />
+    </LinearLayout>
+</LinearLayout>

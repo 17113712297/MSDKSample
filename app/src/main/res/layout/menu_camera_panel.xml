@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/menuCameraPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+    <TextView style="@style/DashboardSection" android:text="镜头选择" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnLensWide" style="@style/DashboardButton" android:text="广角" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnLensZoom" style="@style/DashboardButton" android:text="变焦" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnLensThermal" style="@style/DashboardButton" android:text="红外" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+    </LinearLayout>
+    <TextView style="@style/DashboardSection" android:text="拍摄控制" />
+    <LinearLayout android:id="@+id/photoControlLayout" android:layout_width="match_parent" android:layout_height="88dp" android:layout_marginTop="10dp" android:orientation="horizontal" android:gravity="center">
+        <dji.v5.ux.cameracore.widget.cameracontrols.photovideoswitch.PhotoVideoSwitchWidget android:id="@+id/photoVideoSwitchWidget" android:layout_width="56dp" android:layout_height="56dp" android:layout_marginEnd="28dp" android:contentDescription="切换拍照或录像模式" />
+        <dji.v5.ux.cameracore.widget.cameracapture.recordvideo.RecordVideoWidget android:id="@+id/recordVideoWidget" android:layout_width="60dp" android:layout_height="60dp" android:layout_marginEnd="28dp" android:contentDescription="录像控制" />
+        <dji.v5.ux.cameracore.widget.cameracapture.shootphoto.ShootPhotoWidget android:id="@+id/shootPhotoWidget" android:layout_width="60dp" android:layout_height="60dp" android:contentDescription="拍照" />
+    </LinearLayout>
+    <dji.v5.ux.visualcamera.zoom.FocalZoomWidget android:id="@+id/focalZoomWidget" android:layout_width="56dp" android:layout_height="250dp" android:layout_gravity="center_horizontal" android:visibility="gone" />
+    <TextView style="@style/DashboardHint" android:text="切换镜头后，拍照、录像和变焦控件同步使用当前镜头。" />
+</LinearLayout>

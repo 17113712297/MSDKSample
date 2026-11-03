@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/menuFlightPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="visible">
+    <TextView style="@style/DashboardSection" android:text="飞行操作" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnTakeoff" style="@style/DashboardButton" android:text="起飞前检查" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnAutoLanding" style="@style/DashboardButton" android:text="视觉降落" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" android:textColor="#FF949D" />
+    </LinearLayout>
+    <TextView style="@style/DashboardSection" android:text="任务控制" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnMissionPause" style="@style/DashboardButton" android:text="暂停任务" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" android:textColor="#F4CE7C" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnMissionResume" style="@style/DashboardButton" android:text="继续任务" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+    </LinearLayout>
+    <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnMissionReturn" style="@style/DashboardButton" android:text="沿航线返航" />
+    <TextView style="@style/DashboardHint" android:text="返航将沿已飞过的航点返回起点，随后进入视觉降落。" />
+</LinearLayout>

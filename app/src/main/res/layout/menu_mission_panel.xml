@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/menuMissionPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+    <TextView style="@style/DashboardSection" android:text="作业模式" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnModeMapping" style="@style/DashboardButton" android:text="建图" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnModeCollect" style="@style/DashboardButton" android:text="采点" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+    </LinearLayout>
+    <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnModeCruise" style="@style/DashboardButton" android:text="巡航任务" />
+    <TextView style="@style/DashboardSection" android:text="航点管理" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnRecordWaypoint" style="@style/DashboardButton" android:text="记录航点" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnSaveWaypoints" style="@style/DashboardButton" android:text="保存航线" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+    </LinearLayout>
+    <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnClearWaypoints" style="@style/DashboardButton" android:text="清除航点" android:textColor="#FFB5A6" />
+</LinearLayout>

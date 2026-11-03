@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.example.msdksample.logs.OperationLogger
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -156,6 +157,11 @@ class VelocityControlPanel {
     /** 获取当前面板状态 */
     fun getState(): PanelState = panelState
 
+    data class TargetVelocity(val x: Float, val y: Float, val z: Float, val yaw: Float)
+
+    /** 给操作区显示目标值，实际机体速度仍由主画面遥测显示。 */
+    fun getTargetVelocity() = TargetVelocity(velX, velY, velZ, velYaw)
+
     /** 当前是否处于 N 挡 — 直接查询 SDK，不依赖缓存的 currentFlightMode */
     fun isInNMode(): Boolean {
         val modeName = queryFlightModeNow()
@@ -237,6 +243,11 @@ class VelocityControlPanel {
         }
     }
 
+    /** 主画面快捷入口只允许停止，避免状态刚变化时反向启动控制。 */
+    fun requestStop() {
+        if (panelState == PanelState.ACTIVE) stopVelocityControl(userInitiated = true)
+    }
+
     /**
      * 调整指定轴的速度
      *
@@ -260,6 +271,7 @@ class VelocityControlPanel {
         }
 
         Log.d(TAG, "速度调整: axis=$axis delta=$actualDelta → X=$velX Y=$velY Z=$velZ")
+        OperationLogger.state("手动速度", "目标速度：X=$velX Y=$velY Z=$velZ m/s，偏航=$velYaw °/s")
         onVelocityChanged?.invoke(velX, velY, velZ)
     }
 
@@ -276,6 +288,7 @@ class VelocityControlPanel {
         val actualDelta = if (delta > 0) STEP_YAW else -STEP_YAW
         velYaw = (velYaw + actualDelta).coerceIn(-MAX_YAW_RATE, MAX_YAW_RATE)
         Log.d(TAG, "Yaw调整: delta=$actualDelta → Yaw=$velYaw")
+        OperationLogger.state("手动速度", "目标速度：X=$velX Y=$velY Z=$velZ m/s，偏航=$velYaw °/s")
         onVelocityChanged?.invoke(velX, velY, velZ)
     }
 
@@ -288,6 +301,7 @@ class VelocityControlPanel {
         velZ = 0f
         velYaw = 0f
         Log.i(TAG, "速度归零 → 悬停")
+        OperationLogger.state("手动速度", "目标速度已归零，请求悬停")
         onVelocityChanged?.invoke(0f, 0f, 0f)
     }
 
@@ -317,17 +331,17 @@ class VelocityControlPanel {
         when {
             panelState == PanelState.ACTIVE -> {
                 startStopBtn.text = "关闭速度控制"
-                startStopBtn.setBackgroundColor(0xFFD32F2F.toInt())
+                startStopBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFD32F2F.toInt())
                 startStopBtn.isEnabled = true
             }
             !isInNMode() -> {
                 startStopBtn.text = "启动速度控制"
-                startStopBtn.setBackgroundColor(0xFF555555.toInt())
+                startStopBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF555555.toInt())
                 startStopBtn.isEnabled = false
             }
             else -> {
                 startStopBtn.text = "启动速度控制"
-                startStopBtn.setBackgroundColor(0xFF4CAF50.toInt())
+                startStopBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF4CAF50.toInt())
                 startStopBtn.isEnabled = true
             }
         }

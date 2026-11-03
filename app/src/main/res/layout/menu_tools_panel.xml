@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/menuToolsPanel" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+    <TextView style="@style/DashboardSection" android:text="记录与配置" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnOperationLogs" style="@style/DashboardButton" android:text="操作日志" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnModeSettings" style="@style/DashboardButton" android:text="连接设置" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+    </LinearLayout>
+    <TextView style="@style/DashboardSection" android:text="图传直播" />
+    <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnLiveStreamPanel" style="@style/DashboardButton" android:text="展开直播设置" />
+    <LinearLayout android:id="@+id/liveStreamLayout" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+        <TextView style="@style/DashboardHint" android:text="RTMP 地址" />
+        <TextView android:id="@+id/liveStreamAddressText" style="@style/DashboardHint" android:text="--" android:fontFamily="monospace" android:textIsSelectable="true" />
+        <EditText android:id="@+id/liveStreamAddressInput" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="8dp" android:inputType="textUri" android:singleLine="true" android:imeOptions="actionDone" android:textColor="#FFFFFF" android:textColorHint="#7F94AE" android:backgroundTint="#8CA5C6" android:hint="rtmp://服务器/live/stream" android:textSize="12sp" android:padding="8dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnLiveStreamSave" style="@style/DashboardButton" android:text="保存推流地址" />
+        <TextView android:id="@+id/liveStreamStatusText" style="@style/DashboardHint" android:text="未开始" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnLiveStreamAction" style="@style/DashboardButton" android:text="开始 RTMP 推流" />
+    </LinearLayout>
+    <TextView style="@style/DashboardSection" android:text="手动速度控制" />
+    <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelocityPanel" style="@style/DashboardButton" android:text="展开速度控制" />
+    <LinearLayout android:id="@+id/velocityControlLayout" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">
+        <TextView android:id="@+id/txtVelStatus" style="@style/DashboardHint" android:text="等待 N 挡就绪" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelStartStop" style="@style/DashboardButton" android:text="启动速度控制" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelZero" style="@style/DashboardButton" android:text="速度归零" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelXMinus" style="@style/DashboardButton" android:text="X −" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelXPlus" style="@style/DashboardButton" android:text="X ＋" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelYMinus" style="@style/DashboardButton" android:text="Y −" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelYPlus" style="@style/DashboardButton" android:text="Y ＋" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelZMinus" style="@style/DashboardButton" android:text="Z −" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelZPlus" style="@style/DashboardButton" android:text="Z ＋" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelYawMinus" style="@style/DashboardButton" android:text="偏航 −" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnVelYawPlus" style="@style/DashboardButton" android:text="偏航 ＋" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+        </LinearLayout>
+        <TextView android:id="@+id/velocityControlHint" style="@style/DashboardHint" android:text="启动后自动回到主画面调速。X/Y/Z 步长 0.1 m/s，偏航步长 5°/s。" />
+    </LinearLayout>
+</LinearLayout>

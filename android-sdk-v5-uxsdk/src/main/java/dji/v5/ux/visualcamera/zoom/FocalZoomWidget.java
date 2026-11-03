@@ -8,13 +8,13 @@ import androidx.annotation.Nullable;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import dji.sdk.keyvalue.value.common.CameraLensType;
 import dji.sdk.keyvalue.value.common.ComponentIndexType;
-import dji.v5.ux.R;
 import dji.v5.ux.core.base.ICameraIndex;
 import dji.v5.ux.core.base.widget.ConstraintLayoutWidget;
 
 public class FocalZoomWidget extends ConstraintLayoutWidget<Object> implements ICameraIndex {
 
     private FocalZoomWidgetView focalZoomWidgetView;
+    private CameraLensType currentLensType = CameraLensType.UNKNOWN;
 
     public FocalZoomWidget(Context context) {
         super(context);
@@ -30,11 +30,24 @@ public class FocalZoomWidget extends ConstraintLayoutWidget<Object> implements I
 
     @Override
     protected void initView(@NonNull Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
-        int widthMeasureSpec = (int) getResources().getDimension(R.dimen.uxsdk_42_dp);
-        int heightMeasureSpec = (int) getResources().getDimension(R.dimen.uxsdk_250_dp);
         focalZoomWidgetView = new FocalZoomWidgetView(context, attrs, defStyleAttr);
-        ConstraintLayout.LayoutParams layoutParams = new ConstraintLayout.LayoutParams(widthMeasureSpec, heightMeasureSpec);
+        // Follow the size assigned by the containing layout; a fixed child height clips the minus button.
+        ConstraintLayout.LayoutParams layoutParams = new ConstraintLayout.LayoutParams(0, 0);
+        layoutParams.startToStart = ConstraintLayout.LayoutParams.PARENT_ID;
+        layoutParams.endToEnd = ConstraintLayout.LayoutParams.PARENT_ID;
+        layoutParams.topToTop = ConstraintLayout.LayoutParams.PARENT_ID;
+        layoutParams.bottomToBottom = ConstraintLayout.LayoutParams.PARENT_ID;
         this.addView(focalZoomWidgetView, layoutParams);
+    }
+
+    /** Request the next supported zoom gear. False means unavailable or already at the limit. */
+    public boolean zoomIn() {
+        return isEnabled() && showZoomView(currentLensType) && focalZoomWidgetView != null && focalZoomWidgetView.zoomIn();
+    }
+
+    /** Request the previous supported zoom gear without synthesizing a touch event. */
+    public boolean zoomOut() {
+        return isEnabled() && showZoomView(currentLensType) && focalZoomWidgetView != null && focalZoomWidgetView.zoomOut();
     }
 
     @NonNull
@@ -57,9 +70,10 @@ public class FocalZoomWidget extends ConstraintLayoutWidget<Object> implements I
 
     @Override
     public void updateCameraSource(@NonNull ComponentIndexType cameraIndex, @NonNull CameraLensType lensType) {
+        currentLensType = lensType;
+        focalZoomWidgetView.updateCameraSource(cameraIndex, lensType);
         if (showZoomView(lensType)) {
             focalZoomWidgetView.setVisibility(VISIBLE);
-            focalZoomWidgetView.updateCameraSource(cameraIndex, lensType);
             return;
         }
         focalZoomWidgetView.setVisibility(GONE);

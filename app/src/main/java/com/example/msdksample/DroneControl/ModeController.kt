@@ -2,7 +2,9 @@ package com.example.msdksample
 
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import com.example.msdksample.logs.OperationLogger
 
 /**
  * ModeController — 模式管理器
@@ -71,9 +73,22 @@ class ModeController {
     var mappingState: MappingState = MappingState.IDLE
         private set
 
-    @Volatile
-    var collectState: CollectState = CollectState.IDLE
-        private set
+    private val collectSession = CollectSessionState()
+    val collectState: CollectState
+        get() = when (collectSession.phase) {
+            CollectSessionState.Phase.IDLE -> CollectState.IDLE
+            CollectSessionState.Phase.RUNNING -> CollectState.RUNNING
+            CollectSessionState.Phase.MAP_2D_DONE -> CollectState.MAP_2D_DONE
+            CollectSessionState.Phase.PIXEL_DONE -> CollectState.PIXEL_DONE
+        }
+    val isCollecting: Boolean get() = collectSession.isCollecting
+    val collectStopPending: Boolean get() = collectSession.stopPending
+    private val collectStopTimeoutRunnable = Runnable {
+        if (collectSession.expireStop(SystemClock.elapsedRealtime())) {
+            report("⚠️ 等待结束采点确认超时，采点状态仍保留；请检查连接后重试结束")
+            notifyCollectSession()
+        }
+    }
 
     @Volatile
     var cruiseState: CruiseState = CruiseState.IDLE
@@ -92,6 +107,8 @@ class ModeController {
     // ── 回调 ────────────────────────────────────────────────
     var onMappingStateChanged: ((MappingState) -> Unit)? = null
     var onCollectStateChanged: ((CollectState) -> Unit)? = null
+    /** 主画面常驻入口；不被采点配置弹窗的临时状态回调覆盖。 */
+    var onCollectSessionChanged: (() -> Unit)? = null
     var onCruiseStateChanged: ((CruiseState) -> Unit)? = null
     var onSettingsStateChanged: ((SettingsState) -> Unit)? = null
     var onLogMessage: ((String) -> Unit)? = null
@@ -110,14 +127,14 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_MAPPING_SET_NAME, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "mappingSetName: $mapName")
-        onLogMessage?.invoke("设置地图名称: $mapName")
+        report("设置地图名称: $mapName")
     }
 
     fun mappingStart() {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_MAPPING_START)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "mappingStart")
-        onLogMessage?.invoke("开始建图...")
+        report("开始建图...")
     }
 
     fun mappingSaveMap(mapName: String) {
@@ -125,14 +142,14 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_MAPPING_SAVE_MAP, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "mappingSaveMap: $mapName")
-        onLogMessage?.invoke("保存地图: $mapName")
+        report("保存地图: $mapName")
     }
 
     fun mappingStop() {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_MAPPING_STOP)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "mappingStop")
-        onLogMessage?.invoke("结束建图...")
+        report("结束建图...")
     }
 
     fun listMaps() {
@@ -257,7 +274,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_COLLECT_SET_MAP, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "collectSetMap: $mapFileName")
-        onLogMessage?.invoke("设置定位地图: $mapFileName")
+        report("设置定位地图: $mapFileName")
     }
 
     /**
@@ -269,7 +286,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_COLLECT_SET_WP_NAME, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "collectSetWpName: $filename")
-        onLogMessage?.invoke("设置航点文件名: $filename")
+        report("设置航点文件名: $filename")
     }
 
     /**
@@ -280,7 +297,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_COLLECT_START)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "collectStart")
-        onLogMessage?.invoke("开始采点...")
+        report("开始采点...")
     }
 
     /**
@@ -291,7 +308,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_COLLECT_GEN_2D)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "collectGen2D")
-        onLogMessage?.invoke("生成2D地图...")
+        report("生成2D地图...")
     }
 
     /**
@@ -302,7 +319,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_COLLECT_GEN_PIXEL)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "collectGenPixel")
-        onLogMessage?.invoke("生成像素坐标...")
+        report("生成像素坐标...")
     }
 
     /**
@@ -310,10 +327,17 @@ class ModeController {
      * 停止雷达 + 定位 + 记录器
      */
     fun collectStop() {
+        if (!collectSession.requestStop(SystemClock.elapsedRealtime())) {
+            report(if (collectStopPending) "正在等待机载确认结束采点，请勿重复发送" else "当前没有已确认启动的采点任务")
+            return
+        }
+        report("正在请求结束采点，等待机载确认...")
+        notifyCollectSession()
+        mainHandler.removeCallbacks(collectStopTimeoutRunnable)
+        mainHandler.postDelayed(collectStopTimeoutRunnable, CollectSessionState.STOP_TIMEOUT_MS)
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_COLLECT_STOP)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "collectStop")
-        onLogMessage?.invoke("结束采点...")
     }
 
     // ============================================================
@@ -331,7 +355,7 @@ class ModeController {
         Log.i(TAG, "cruiseSetMap: $mapFileName")
         cruiseState = CruiseState.MAP_SET
         onCruiseStateChanged?.invoke(cruiseState)
-        onLogMessage?.invoke("设置定位地图: $mapFileName")
+        report("设置定位地图: $mapFileName")
     }
 
     /**
@@ -345,7 +369,7 @@ class ModeController {
         Log.i(TAG, "cruiseSetWp: $wpFileName")
         cruiseState = CruiseState.WP_SET
         onCruiseStateChanged?.invoke(cruiseState)
-        onLogMessage?.invoke("设置航线文件: $wpFileName")
+        report("设置航线文件: $wpFileName")
     }
 
     /**
@@ -356,7 +380,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_CRUISE_START)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "cruiseStart")
-        onLogMessage?.invoke("开始巡航...")
+        report("开始巡航...")
     }
 
     /**
@@ -368,7 +392,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_CRUISE_SELECT_WP, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "cruiseSelectWp: $wpFileName")
-        onLogMessage?.invoke("选择航线: $wpFileName")
+        report("选择航线: $wpFileName")
     }
 
     /**
@@ -380,7 +404,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_CRUISE_SET_SERVER, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "cruiseSetServer: $addr")
-        onLogMessage?.invoke("设置服务器: $addr")
+        report("设置服务器: $addr")
     }
 
     /**
@@ -392,7 +416,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_CRUISE_SET_GIMBAL_PITCH, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "cruiseSetGimbalPitch: $pitch")
-        onLogMessage?.invoke("设置云台俯仰角: ${pitch}°")
+        report("设置云台俯仰角: ${pitch}°")
     }
 
     // ============================================================
@@ -411,7 +435,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodePayload(DroneCommProtocol.CMD_SETTINGS_UPDATE, payload)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "settingsUpdate: $key = $value")
-        onLogMessage?.invoke("设置 $key = $value")
+        report("设置 $key = $value")
     }
 
     /**
@@ -422,7 +446,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_SETTINGS_GET)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "settingsGet")
-        onLogMessage?.invoke("正在获取配置...")
+        report("正在获取配置...")
     }
 
     /**
@@ -432,7 +456,7 @@ class ModeController {
         val frame = DroneCommProtocol.encodeSimple(DroneCommProtocol.CMD_SETTINGS_RESTART_HTTP)
         DroneControlService.sendFrame(frame)
         Log.i(TAG, "settingsRestartHttp")
-        onLogMessage?.invoke("正在重启 HTTP 服务...")
+        report("正在重启 HTTP 服务...")
     }
 
     fun onSettingsResponsePayload(payload: ByteArray) {
@@ -477,64 +501,68 @@ class ModeController {
                 if (success) {
                     mappingState = MappingState.RUNNING
                     onMappingStateChanged?.invoke(mappingState)
-                    onLogMessage?.invoke("✅ 建图已启动")
+                    report("✅ 建图已启动")
                 } else {
-                    onLogMessage?.invoke("❌ 启动建图失败")
+                    report("❌ 启动建图失败")
                 }
             }
             DroneCommProtocol.CMD_MAPPING_SAVE_MAP -> {
                 if (success) {
                     mappingState = MappingState.SAVED
                     onMappingStateChanged?.invoke(mappingState)
-                    onLogMessage?.invoke("✅ 地图已保存")
+                    report("✅ 地图已保存")
                 } else {
-                    onLogMessage?.invoke("❌ 保存地图失败")
+                    report("❌ 保存地图失败")
                 }
             }
             DroneCommProtocol.CMD_MAPPING_STOP -> {
                 if (success) {
                     mappingState = MappingState.IDLE
                     onMappingStateChanged?.invoke(mappingState)
-                    onLogMessage?.invoke("✅ 建图已停止")
+                    report("✅ 建图已停止")
                 } else {
-                    onLogMessage?.invoke("⚠️ 停止建图时出现问题")
+                    report("⚠️ 停止建图时出现问题")
                 }
             }
             // ── 采点模式 ACK ─────────────────────────────────
             DroneCommProtocol.CMD_COLLECT_START -> {
                 if (success) {
-                    collectState = CollectState.RUNNING
-                    onCollectStateChanged?.invoke(collectState)
-                    onLogMessage?.invoke("✅ 采点已启动")
+                    collectSession.acceptStart()
+                    notifyCollectSession()
+                    report("✅ 采点已启动")
                 } else {
-                    onLogMessage?.invoke("❌ 启动采点失败")
+                    notifyCollectSession()
+                    report("❌ 启动采点失败")
                 }
             }
             DroneCommProtocol.CMD_COLLECT_GEN_2D -> {
                 if (success) {
-                    collectState = CollectState.MAP_2D_DONE
-                    onCollectStateChanged?.invoke(collectState)
-                    onLogMessage?.invoke("✅ 2D地图已生成")
+                    if (collectSession.acceptGenerated(CollectSessionState.Phase.MAP_2D_DONE)) {
+                        notifyCollectSession()
+                        report("✅ 2D地图已生成")
+                    } else Log.i(TAG, "忽略已结束采点任务的 2D 地图回执")
                 } else {
-                    onLogMessage?.invoke("❌ 生成2D地图失败")
+                    report("❌ 生成2D地图失败")
                 }
             }
             DroneCommProtocol.CMD_COLLECT_GEN_PIXEL -> {
                 if (success) {
-                    collectState = CollectState.PIXEL_DONE
-                    onCollectStateChanged?.invoke(collectState)
-                    onLogMessage?.invoke("✅ 像素坐标已生成")
+                    if (collectSession.acceptGenerated(CollectSessionState.Phase.PIXEL_DONE)) {
+                        notifyCollectSession()
+                        report("✅ 像素坐标已生成")
+                    } else Log.i(TAG, "忽略已结束采点任务的像素坐标回执")
                 } else {
-                    onLogMessage?.invoke("❌ 生成像素坐标失败")
+                    report("❌ 生成像素坐标失败")
                 }
             }
             DroneCommProtocol.CMD_COLLECT_STOP -> {
+                mainHandler.removeCallbacks(collectStopTimeoutRunnable)
+                collectSession.acknowledgeStop(success)
+                notifyCollectSession()
                 if (success) {
-                    collectState = CollectState.IDLE
-                    onCollectStateChanged?.invoke(collectState)
-                    onLogMessage?.invoke("✅ 采点已停止")
+                    report("✅ 采点已停止")
                 } else {
-                    onLogMessage?.invoke("⚠️ 停止采点时出现问题")
+                    report("⚠️ 结束采点未确认，采点状态仍保留；可重试结束")
                 }
             }
             // ── 巡航模式 ACK ─────────────────────────────────
@@ -542,9 +570,9 @@ class ModeController {
                 if (success) {
                     cruiseState = CruiseState.READY
                     onCruiseStateChanged?.invoke(cruiseState)
-                    onLogMessage?.invoke("✅ 巡航已启动（起飞指令已发送）")
+                    report("✅ 巡航已启动（起飞指令已发送）")
                 } else {
-                    onLogMessage?.invoke("❌ 启动巡航失败")
+                    report("❌ 启动巡航失败")
                 }
             }
             // ── 设置模式 ACK ─────────────────────────────────
@@ -552,9 +580,9 @@ class ModeController {
                 if (success) {
                     settingsState = SettingsState.UPDATED
                     onSettingsStateChanged?.invoke(settingsState)
-                    onLogMessage?.invoke("✅ 配置已更新")
+                    report("✅ 配置已更新")
                 } else {
-                    onLogMessage?.invoke("❌ 配置更新失败")
+                    report("❌ 配置更新失败")
                 }
             }
         }
@@ -575,5 +603,28 @@ class ModeController {
         val files = fileList.split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }
         pager.onLegacy(files.distinct())
         emitPageState()
+    }
+    private fun notifyCollectSession() {
+        onCollectSessionChanged?.invoke()
+        onCollectStateChanged?.invoke(collectState)
+    }
+
+    /** 只释放页面回调与定时任务，不发送作业停止指令，也不改动已确认的作业状态。 */
+    fun release() {
+        mainHandler.removeCallbacksAndMessages(null)
+        onMappingStateChanged = null
+        onCollectStateChanged = null
+        onCollectSessionChanged = null
+        onCruiseStateChanged = null
+        onSettingsStateChanged = null
+        onLogMessage = null
+        onFileListUpdated = null
+        onFileListPageState = null
+        onSettingsResponse = null
+    }
+
+    private fun report(message: String) {
+        OperationLogger.state("模式管理", message)
+        onLogMessage?.invoke(message)
     }
 }

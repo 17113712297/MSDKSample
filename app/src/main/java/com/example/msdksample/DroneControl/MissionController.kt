@@ -3,6 +3,7 @@ package com.example.msdksample
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.example.msdksample.logs.OperationLogger
 
 /**
  * MissionController — 任务控制（暂停 / 继续 / 返航）
@@ -118,12 +119,14 @@ class MissionController {
         wpTotal = total
         if (changed) {
             Log.i(TAG, "state -> ${DroneCommProtocol.MissionState.name(newState)} ($index/$total)")
+            OperationLogger.state("机载任务", "状态：${DroneCommProtocol.MissionState.name(newState)}，航点=$index/$total")
         }
         mainHandler.post { onStateChanged?.invoke(newState, index, total) }
     }
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
+        OperationLogger.state("任务控制", msg)
         mainHandler.post { onLogMessage?.invoke(msg) }
     }
 }

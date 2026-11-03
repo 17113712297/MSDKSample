@@ -3,6 +3,7 @@ package com.example.msdksample
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.example.msdksample.logs.OperationLogger
 
 /**
  * WaypointController
@@ -46,6 +47,7 @@ class WaypointController {
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
+        OperationLogger.state("航点指令", msg)
         mainHandler.post { logCallback?.invoke(msg) }
     }
 }

@@ -12,8 +12,10 @@ import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
+import android.view.ViewConfiguration;
 
 import java.math.BigDecimal;
+import java.util.Arrays;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -114,9 +116,14 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
 
     private VelocityTracker mVelocityTracker;
     private float mTouchDownY = 0;
-    private float mTouchDownTime = 0;
+    private long mTouchDownTime = 0;
     private long mFinalTouchTime;
     private boolean mIsInited;
+    private boolean mHasValidRange;
+    private boolean mHasValidDroneRatio;
+    private boolean mApplyingTelemetry;
+    private boolean mGestureActive;
+    private boolean mTouchMoved;
     private FocalZoomWidgetViewModel widgetModel;
 
     public FocalZoomWidgetView(Context context) {
@@ -165,6 +172,13 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
 
     @Override
     public void updateCameraSource(@NonNull ComponentIndexType cameraIndex, @NonNull CameraLensType lensType) {
+        finishTouch();
+        mHasValidRange = false;
+        mHasValidDroneRatio = false;
+        mCurrentLevel = -1;
+        mFinalTouchTime = 0;
+        if (myHandler != null) myHandler.removeMessages(FOCAL_CHECK_MESSAGE_TYPE);
+        invalidate();
         widgetModel.updateCameraSource(cameraIndex, lensType);
     }
 
@@ -178,6 +192,8 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
 
     @Override
     protected void onDetachedFromWindow() {
+        finishTouch();
+        if (myHandler != null) myHandler.removeMessages(FOCAL_CHECK_MESSAGE_TYPE);
         if (!isInEditMode()) {
             widgetModel.cleanup();
         }
@@ -314,9 +330,11 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
         super.onDraw(canvas);
 
         drawBackground(canvas);
-        drawMarkText(canvas);
-        drawDot(canvas);
-        drawSlider(canvas);
+        if (mHasValidRange && mHasValidDroneRatio) {
+            drawMarkText(canvas);
+            drawDot(canvas);
+            drawSlider(canvas);
+        }
         drawSymbol(canvas);
     }
 
@@ -388,7 +406,7 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
 
     private void drawSymbol(Canvas canvas) {
         Rect plusDestRect = new Rect(0, 0, mViewWidth, mViewWidth);
-        if (mCurrentScreenFocalMultiTimes == mFocalLengthGears[mFocalLengthGears.length - 1]) {
+        if (!mHasValidRange || !mHasValidDroneRatio || mCurrentScreenFocalMultiTimes >= mFocalLengthGears[mFocalLengthGears.length - 1]) {
             canvas.drawBitmap(mPlusBitmapUnclick, null, plusDestRect, mSymbolBitmapPaint);
         } else {
             canvas.drawBitmap(mPlusBitmap, null, plusDestRect, mSymbolBitmapPaint);
@@ -397,7 +415,7 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
 
         int destMinusY = mViewHeight - mViewWidth;
         Rect minusDestRect = new Rect(0, destMinusY, mViewWidth, destMinusY + mViewWidth);
-        if (mCurrentScreenFocalMultiTimes == mFocalLengthGears[0]) {
+        if (!mHasValidRange || !mHasValidDroneRatio || mCurrentScreenFocalMultiTimes <= mFocalLengthGears[0]) {
             canvas.drawBitmap(mMinusBitmapUnclick, null, minusDestRect, mSymbolBitmapPaint);
         } else {
             canvas.drawBitmap(mMinusBitmap, null, minusDestRect, mSymbolBitmapPaint);
@@ -406,28 +424,73 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        if (!isEnabled()) {
+        final int action = event.getActionMasked();
+        if (!isEnabled() || !isShown() || !isReadyForUserZoom()) {
+            finishTouch();
             return false;
         }
-        mFinalTouchTime = SystemClock.uptimeMillis();
-        if (mVelocityTracker == null) {
+        if (action == MotionEvent.ACTION_DOWN) {
+            finishTouch();
+            mGestureActive = true;
             mVelocityTracker = VelocityTracker.obtain();
-        }
+            // This child receives DOWN after ScrollView has reset its own gesture state.
+            if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+        } else if (!mGestureActive) return false;
+        mFinalTouchTime = SystemClock.uptimeMillis();
         mVelocityTracker.addMovement(event);
 
-        switch (event.getAction()) {
+        switch (action) {
             case MotionEvent.ACTION_DOWN:
                 onTouchEventDown(event);
                 break;
             case MotionEvent.ACTION_UP:
                 onTouchEventUp(event);
+                finishTouch();
                 break;
             case MotionEvent.ACTION_MOVE:
                 onTouchEventMove(event);
                 break;
+            case MotionEvent.ACTION_CANCEL:
+            case MotionEvent.ACTION_POINTER_DOWN:
+                finishTouch();
+                break;
             default:
                 break;
         }
+        return true;
+    }
+
+    private void finishTouch() {
+        mGestureActive = false;
+        mTouchMoved = false;
+        mIsStartSlowMove = false;
+        mIsStartQuickMove = false;
+        if (mVelocityTracker != null) {
+            mVelocityTracker.recycle();
+            mVelocityTracker = null;
+        }
+        if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
+    }
+
+    private boolean isReadyForUserZoom() {
+        return widgetModel != null && (widgetModel.getLensType() == CameraLensType.CAMERA_LENS_ZOOM
+                || widgetModel.getLensType() == CameraLensType.CAMERA_LENS_THERMAL)
+                && mHasValidRange && mHasValidDroneRatio && mCurrentLevel >= 0;
+    }
+
+    public boolean zoomIn() {
+        if (!isEnabled() || !isReadyForUserZoom()
+                || mCurrentScreenFocalMultiTimes >= mFocalLengthGears[mFocalLengthGears.length - 1]) return false;
+        mFinalTouchTime = SystemClock.uptimeMillis();
+        upLevel();
+        return true;
+    }
+
+    public boolean zoomOut() {
+        if (!isEnabled() || !isReadyForUserZoom()
+                || mCurrentScreenFocalMultiTimes <= mFocalLengthGears[0]) return false;
+        mFinalTouchTime = SystemClock.uptimeMillis();
+        downLevel();
         return true;
     }
 
@@ -441,7 +504,9 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
         mIsStartSlowMove = false;
         mIsStartQuickMove = false;
         //这里处理点击事件（包括+、-符号）
-        if (SystemClock.uptimeMillis() - mTouchDownTime < FOCAL_CLICK_INTERVAL) {
+        if (!mTouchMoved && event.getX() >= 0 && event.getX() <= getWidth()
+                && event.getY() >= 0 && event.getY() <= getHeight()
+                && SystemClock.uptimeMillis() - mTouchDownTime < FOCAL_CLICK_INTERVAL) {
             if (event.getY() < mUpDividerY) {
                 //click plus
                 upLevel();
@@ -456,7 +521,9 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
     }
 
     private void onTouchEventMove(MotionEvent event) {
-        float nowY = event.getRawY();
+        float nowY = event.getY();
+        if (Math.abs(nowY - mTouchDownY) > ViewConfiguration.get(getContext()).getScaledTouchSlop()) mTouchMoved = true;
+        if (mSliderBottomY <= mSliderTopY || mHighLevelValue <= mLowLevelValue) return;
         if (mTouchDownY > mUpDividerY && mTouchDownY < mDownDividerY) {
             mVelocityTracker.computeCurrentVelocity(1000);
             float velocity = mVelocityTracker.getYVelocity();
@@ -514,7 +581,7 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
     }
 
     private void setCurrentValue(float curValue) {
-        if (mFocalLengthGears.length < 1) {
+        if (!mHasValidRange || Float.isNaN(curValue) || Float.isInfinite(curValue)) {
             return;
         }
         curValue = curValue < mFocalLengthGears[0] ? mFocalLengthGears[0] : curValue;
@@ -523,22 +590,27 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
     }
 
     private void upLevel() {
-        int level = 1;
-        if (mCurrentScreenFocalMultiTimes == mHighLevelValue) {
-            level++;
+        if (!isReadyForUserZoom()) return;
+        for (int gear : mFocalLengthGears) {
+            if (gear > mCurrentScreenFocalMultiTimes + THRESHOLD) {
+                setCurrentValue(gear);
+                return;
+            }
         }
-        setLevel(mCurrentLevel + level, 0);
     }
 
     private void downLevel() {
-        int level = 1;
-        if (mCurrentScreenFocalMultiTimes == mLowLevelValue) {
-            level++;
+        if (!isReadyForUserZoom()) return;
+        for (int i = mFocalLengthGears.length - 1; i >= 0; i--) {
+            if (mFocalLengthGears[i] < mCurrentScreenFocalMultiTimes - THRESHOLD) {
+                setCurrentValue(mFocalLengthGears[i]);
+                return;
+            }
         }
-        setLevel(mCurrentLevel - level, 0);
     }
 
     private void setLevel(int level, float defaultValue) {
+        if (!mHasValidRange) return;
         int newLevel;
         if (level < 0) {
             newLevel = 0;
@@ -668,6 +740,8 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
      * 1、be divisible by step
      */
     private void reviseValueAndShow(float value) {
+        if (!mHasValidRange || Float.isNaN(value) || Float.isInfinite(value)) return;
+        value = Math.max(mFocalLengthGears[0], Math.min(value, mFocalLengthGears[mFocalLengthGears.length - 1]));
         calculateStep(value);
         value = calculateValue(value);
         calculateLevel(value);
@@ -683,7 +757,7 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
     }
 
     private void calculateLevel(float value) {
-        if (value >= mHighLevelValue || value <= mLowLevelValue) {
+        if (mCurrentLevel == -1 || value >= mHighLevelValue || value <= mLowLevelValue) {
             int nowLevel = 0;
 
             for (int i = mFocalLengthGears.length - 1; i > 0; i--) {
@@ -756,7 +830,8 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
         }
 
         //说明是手在滑，则发送数据
-        if (SystemClock.uptimeMillis() - mFinalTouchTime < FOCAL_TOUCH_TIMEOUT) {
+        if (!mApplyingTelemetry && mHasValidRange && mHasValidDroneRatio
+                && mFinalTouchTime > 0 && SystemClock.uptimeMillis() - mFinalTouchTime < FOCAL_TOUCH_TIMEOUT) {
             widgetModel.setFocusDistance(curValue);
             if (myHandler != null) {
                 myHandler.removeMessages(FOCAL_CHECK_MESSAGE_TYPE);
@@ -765,28 +840,50 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
     }
 
     private void checkValue() {
+        if (!mHasValidRange || !mHasValidDroneRatio) return;
         if (Math.abs(mCurrentDroneFocalMultiTimes - mCurrentScreenFocalMultiTimes) > THRESHOLD) {
-            setCurrentValue(mCurrentDroneFocalMultiTimes);
+            showDroneFocalLength();
         }
     }
 
-    public void pushFocalLength(float droneFocalMultiTimes) {
-        mCurrentDroneFocalMultiTimes = droneFocalMultiTimes;
+    private void showDroneFocalLength() {
+        if (!mHasValidRange || !mHasValidDroneRatio) return;
+        mApplyingTelemetry = true;
+        try { setCurrentValue(mCurrentDroneFocalMultiTimes); }
+        finally { mApplyingTelemetry = false; }
+    }
 
-        if (SystemClock.uptimeMillis() - mFinalTouchTime < FOCAL_TOUCH_TIMEOUT) {
+    public void pushFocalLength(float droneFocalMultiTimes) {
+        mHasValidDroneRatio = droneFocalMultiTimes > 0 && !Float.isNaN(droneFocalMultiTimes) && !Float.isInfinite(droneFocalMultiTimes);
+        if (!mHasValidDroneRatio) { mCurrentLevel = -1; invalidate(); return; }
+        mCurrentDroneFocalMultiTimes = droneFocalMultiTimes;
+        if (!mHasValidRange) return;
+
+        if (mCurrentLevel < 0) {
+            showDroneFocalLength();
+        } else if (mFinalTouchTime > 0 && SystemClock.uptimeMillis() - mFinalTouchTime < FOCAL_TOUCH_TIMEOUT) {
             if (myHandler != null) {
                 myHandler.removeMessages(FOCAL_CHECK_MESSAGE_TYPE);
                 myHandler.sendEmptyMessageDelayed(FOCAL_CHECK_MESSAGE_TYPE, FOCAL_CHANGE_TIMEOUT);
             }
         } else {
             if (Math.abs(mCurrentDroneFocalMultiTimes - mCurrentScreenFocalMultiTimes) > THRESHOLD) {
-                this.post(() -> setCurrentValue(mCurrentDroneFocalMultiTimes));
+                this.post(this::showDroneFocalLength);
             }
         }
     }
 
     public void pushFocalLengthRange(int[] gears) {
-        mFocalLengthGears = gears;
+        mHasValidRange = gears != null && gears.length >= 2;
+        if (mHasValidRange) {
+            for (int i = 0; i < gears.length; i++) {
+                if (gears[i] <= 0 || (i > 0 && gears[i] <= gears[i - 1])) { mHasValidRange = false; break; }
+            }
+        }
+        mCurrentLevel = -1;
+        if (!mHasValidRange) { invalidate(); return; }
+        mFocalLengthGears = Arrays.copyOf(gears, gears.length);
+        showDroneFocalLength();
         if (myHandler != null) {
             myHandler.removeMessages(FOCAL_CHECK_MESSAGE_TYPE);
             myHandler.sendEmptyMessageDelayed(FOCAL_CHECK_MESSAGE_TYPE, FOCAL_CHANGE_TIMEOUT);
@@ -806,6 +903,7 @@ public class FocalZoomWidgetView extends ViewWidget implements ICameraIndex {
     }
 
     public void dispose() {
+        finishTouch();
         if (myHandler != null) {
             myHandler.removeCallbacksAndMessages(null);
         }

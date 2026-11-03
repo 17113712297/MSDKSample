@@ -52,7 +52,7 @@ object DualMarkerLandingConfig {
     const val FINAL_CONFIRM_RETRY_MS = 2000L
     const val MAX_CONFIRM_ATTEMPTS = 3
 
-    const val ALIGN_TOLERANCE_M = 0.05
+    const val ALIGN_TOLERANCE_M = 0.04 // 新旧机巢统一：飞机中心水平径向误差最多 4 cm
     const val MAX_REPROJECTION_ERROR_PX = 3.0
     const val MAX_POSITION_JUMP_M = 0.25
     const val MAX_YAW_JUMP_DEG = 20.0

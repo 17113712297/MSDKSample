@@ -5,6 +5,7 @@ import android.os.SystemClock
 import dji.sdk.keyvalue.value.common.EmptyMsg
 import android.os.HandlerThread
 import android.util.Log
+import com.example.msdksample.logs.OperationLogger
 import dji.sdk.keyvalue.key.BatteryKey
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.FlightControllerKey
@@ -17,6 +18,7 @@ import dji.sdk.keyvalue.value.flightcontroller.FlightCoordinateSystem
 import dji.sdk.keyvalue.value.flightcontroller.FlightMode
 import dji.sdk.keyvalue.value.flightcontroller.RemoteControllerFlightMode
 import dji.sdk.keyvalue.value.flightcontroller.FlightControlAuthorityChangeReason
+import dji.sdk.keyvalue.value.flightcontroller.FlightControlAuthority
 import dji.sdk.keyvalue.value.flightcontroller.RollPitchControlMode
 import dji.sdk.keyvalue.value.flightcontroller.VerticalControlMode
 import dji.sdk.keyvalue.value.flightcontroller.VirtualStickFlightControlParam
@@ -43,7 +45,7 @@ import kotlin.math.min
 // =========================================================================
 enum class TaskState { INACTIVE, LANDING_PREP, LANDING }
 
-class LandingController {
+class LandingController(private val operations: VisionOperationGate) {
 
     companion object {
         const val TAG = "LandingController"
@@ -66,6 +68,11 @@ class LandingController {
     var onYawRateUpdate: ((yawRate: Double) -> Unit)? = null
     var onBatteryUpdate: ((pct: Int) -> Unit)? = null
     var onLandingSucceed: (() -> Unit)? = null
+    var onDockTypeLocked: ((LandingDockType) -> Unit)? = null
+    var onPreparationStarted: (() -> Unit)? = null
+    val dockSession = LandingDockSession()
+    private var operationLease: VisionOperationGate.Lease? = null
+    private var announcedDockType: LandingDockType? = null
     private var pendingStartResult: ((Boolean) -> Unit)? = null
 
     var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
@@ -77,14 +84,21 @@ class LandingController {
         val isFlying: Boolean        = false,
         val altitude: Double         = 999.0,
         val ultrasonicHeight: Double = 999.0,
-        val pitch: Double            = 0.0,
-        val roll: Double             = 0.0,
+        val pitch: Double            = Double.NaN,
+        val roll: Double             = Double.NaN,
         val yaw: Double              = Double.NaN,
-        val velZ: Double             = 0.0
+        val velX: Double             = Double.NaN,
+        val velY: Double             = Double.NaN,
+        val velZ: Double             = Double.NaN,
+        val gimbalPitch: Double      = Double.NaN,
+        val gimbalRoll: Double       = Double.NaN,
+        val gimbalRelativeYaw: Double = Double.NaN
     )
     private val aircraftStateRef = AtomicReference(AircraftState())
 
     private data class VisionMeasurement(
+        val dockType: LandingDockType? = null,
+        val sessionId: Long? = null,
         val targetId:  Int    = -1,
         val errX:      Double = Double.NaN,
         val errY:      Double = Double.NaN,
@@ -142,13 +156,10 @@ class LandingController {
 
     // 控制参数
     private val KP_XY           = 0.8
-    private val KP_YAW          = 0.5
     private val KP_Z_VEL        = 1.2
     private val MAX_XY_VEL      = 0.15
     private val MAX_YAW_VEL     = 20.0
-    private val MIN_YAW_VEL     = 8.0
     private val MAX_DESCEND_VEL = -0.25
-    private val MIN_DESCEND_VEL = -0.05
     private val TILT_LIMIT_DEG  = 15.0
     private val DT              = CONTROL_INTERVAL / 1000.0
     private val MAX_XY_ACCEL    = 0.25
@@ -159,6 +170,16 @@ class LandingController {
     private var cmdRoll     = 0.0
     private var cmdYaw      = 0.0
     private var cmdThrottle = 0.0
+    private val alignmentGate = LandingAlignmentGate()
+    @Volatile private var downwardCameraReady = false
+    private var gimbalStableSinceMs = 0L
+    private var gimbalPrepareStartedMs = 0L
+    private var searchStartedMs = 0L
+    private var authorityRequestedMs = 0L
+    @Volatile private var authorityConfirmed = false
+    private data class StickObservation(val enabled: Boolean = false, val advanced: Boolean = false,
+                                        val msdkOwner: Boolean = false, val timestamp: Long = 0L)
+    private val stickObservation = AtomicReference(StickObservation())
     private var handoffStableSinceMs = 0L
     private var finalLandingStartedMs = 0L
     private var finalLandingAccepted = false
@@ -191,15 +212,33 @@ class LandingController {
             synchronized(this@LandingController) {
                 observedStickEnabled = stickState.isVirtualStickEnable
                 observedStickAtMs = SystemClock.elapsedRealtime()
+                val observation = StickObservation(stickState.isVirtualStickEnable,
+                    stickState.isVirtualStickAdvancedModeEnabled,
+                    stickState.currentFlightControlAuthorityOwner == FlightControlAuthority.MSDK, observedStickAtMs)
+                stickObservation.set(observation)
                 if (stopping) {
                     stopStickConfirmed = !stickState.isVirtualStickEnable
                     refreshStopCompletion()
+                } else if (authorityConfirmed && taskStateRef.get() == TaskState.LANDING && !isFinalPhase() &&
+                    !LandingSafetyPolicy.authorityValid(observation.enabled, observation.advanced, observation.msdkOwner)) {
+                    val generation = missionGeneration
+                    controlHandler.post {
+                        if (generation == missionGeneration && !isFinalPhase()) stopMission("SDK 已报告视觉控制权丢失")
+                    }
                 }
             }
         }
 
         override fun onChangeReasonUpdate(reason: FlightControlAuthorityChangeReason) {
             Log.i(TAG, "控制权变化原因: $reason")
+            if (authorityConfirmed && taskStateRef.get() == TaskState.LANDING && !isFinalPhase() &&
+                reason != FlightControlAuthorityChangeReason.MSDK_REQUEST &&
+                reason != FlightControlAuthorityChangeReason.UNKNOWN) {
+                val generation = missionGeneration
+                controlHandler.post {
+                    if (generation == missionGeneration && !isFinalPhase()) stopMission("SDK 控制权异常移交: $reason")
+                }
+            }
         }
     }
 
@@ -261,10 +300,12 @@ class LandingController {
     // 公开 API
     // =========================================================================
     fun getTaskState(): TaskState = taskStateRef.get()
+    fun canProcessVision(): Boolean = taskStateRef.get() == TaskState.LANDING && downwardCameraReady && !isFinalPhase()
 
-    fun updateVisionData(id: Int, errX: Double, errY: Double, depthZ: Double, yawDeg: Double, timestamp: Long) {
-        if (taskStateRef.get() != TaskState.INACTIVE) {
-            visionRef.set(VisionMeasurement(id, errX, errY, depthZ, yawDeg, timestamp))
+    fun updateVisionData(result: LandingVisionResult) {
+        if (taskStateRef.get() != TaskState.INACTIVE && dockSession.accepts(result.sessionId, result.dockType)) {
+            visionRef.set(VisionMeasurement(result.dockType, result.sessionId, result.targetId,
+                result.errX, result.errY, result.depthZ, result.yawDeg, result.timestamp))
         }
     }
 
@@ -275,6 +316,7 @@ class LandingController {
     @Synchronized
     fun startVisionLanding(onStartResult: ((Boolean) -> Unit)? = null) {
         fun reject(message: String) {
+            OperationLogger.result("视觉降落", false, "启动未受理：$message")
             onError?.invoke(message)
             onStartResult?.invoke(false)
         }
@@ -306,8 +348,8 @@ class LandingController {
             reject("请先停止手动速度控制，再启动视觉降落")
             return
         }
-        DualMarkerLandingConfig.landingError()?.let {
-            reject("双码降落参数未完成: $it")
+        LandingDockGeometry.landingError()?.let {
+            reject("机巢降落参数未完成: $it")
             return
         }
         if (!isWideCameraSelected()) {
@@ -318,9 +360,21 @@ class LandingController {
             reject("⚠️ 拦截: 请将遥控器实体挡位切入 N 挡")
             return
         }
+        val lease = operations.acquire(VisionOperationGate.Owner.LANDING)
+        if (lease == null) {
+            reject("预检或上一任务的相机/云台清理尚未结束，请稍后重试")
+            return
+        }
+        operationLease = lease
         val generation = ++missionGeneration
+        // 仅在上一任务已结束并确认释放后进入此处。开流/清跟踪缓存不能重置类型。
+        dockSession.begin()
+        announcedDockType = null
         pendingStartResult = onStartResult
         setTaskState(TaskState.LANDING_PREP)
+        try { onPreparationStarted?.invoke() } catch (error: Exception) {
+            dispatchError("视觉流准备失败: ${error.message}"); return
+        }
 
         controlHandler.post {
             try {
@@ -353,11 +407,15 @@ class LandingController {
 
                 resetControlState()
                 DroneControlService.onPrepareVisualLanding?.invoke()
+                gimbalPrepareStartedMs = SystemClock.elapsedRealtime()
                 rotateGimbal(-90.0)
+                if (generation != missionGeneration || taskStateRef.get() != TaskState.LANDING_PREP) return@post
 
                 enablePending = true
                 observedStickEnabled = null
                 observedStickAtMs = 0L
+                stickObservation.set(StickObservation())
+                authorityRequestedMs = SystemClock.elapsedRealtime()
                 VirtualStickManager.getInstance().enableVirtualStick(object : CommonCallbacks.CompletionCallback {
                     override fun onSuccess() {
                         synchronized(this@LandingController) {
@@ -414,6 +472,9 @@ class LandingController {
     fun stopMission(reason: String, completed: Boolean = false) {
         val prev = taskStateRef.getAndSet(TaskState.INACTIVE)
         if (prev == TaskState.INACTIVE) return
+        dockSession.freeze()
+        downwardCameraReady = false
+        alignmentGate.reset()
         val needsStickRelease = isVirtualStickActive || enablePending
         val wasFinalLanding = isFinalPhase()
         stopping = needsStickRelease || (wasFinalLanding && !completed)
@@ -430,6 +491,8 @@ class LandingController {
         sendZeroVelocity()
         visionRef.set(VisionMeasurement())
         Log.w(TAG, "🔴 停止任务: $reason (prev=$prev)")
+        if (completed) OperationLogger.result("视觉降落", true, reason)
+        else OperationLogger.state("视觉降落", "任务退出：$reason，退出前状态=$prev")
         missionState          = MissionState.IDLE
         targetLockedYaw       = Double.NaN
         alignYawStartTimeMs   = 0L
@@ -443,7 +506,7 @@ class LandingController {
         onMessage?.invoke("🔴 已退出: $reason")
 
         controlHandler.removeCallbacks(flightControlRunnable)
-        if (stopping) requestStopRelease(missionGeneration)
+        if (stopping) requestStopRelease(missionGeneration) else releaseOperationLease()
     }
 
     /** 只能根据成功应答或近期 SDK 状态解除中止锁；切回 N 挡本身不是释放证据。 */
@@ -469,8 +532,14 @@ class LandingController {
         }
         if (stopStickConfirmed && stopLandingConfirmed) {
             stopping = false
+            releaseOperationLease()
             onMessage?.invoke("已确认控制权释放；切回 N 挡后可手动重新发起降落")
         }
+    }
+
+    private fun releaseOperationLease() {
+        operations.release(operationLease)
+        operationLease = null
     }
 
     @Synchronized
@@ -553,10 +622,16 @@ class LandingController {
 
     private fun setTaskState(newState: TaskState) {
         taskStateRef.set(newState)
+        OperationLogger.state("视觉降落", when (newState) {
+            TaskState.INACTIVE -> "任务空闲"
+            TaskState.LANDING_PREP -> "启动已受理，准备相机和控制权"
+            TaskState.LANDING -> "虚拟摇杆已接管，等待下视就绪并识别机巢"
+        })
         onTaskStateChanged?.invoke(newState)
     }
 
     private fun dispatchError(msg: String) {
+        OperationLogger.error("视觉降落", msg)
         stopMission(msg)
         onError?.invoke(msg)
     }
@@ -593,10 +668,16 @@ class LandingController {
                 rollPitchCoordinateSystem = FlightCoordinateSystem.BODY
                 roll = 0.0; pitch = 0.0; yaw = 0.0; verticalThrottle = 0.0
             })
+            lastCmdSendTime = SystemClock.elapsedRealtime()
         }.onFailure { Log.w(TAG, "零速度请求未成功，继续释放控制权", it) }
     }
 
     private fun resetControlState() {
+        alignmentGate.reset()
+        downwardCameraReady = false
+        gimbalStableSinceMs = 0L
+        searchStartedMs = 0L
+        authorityConfirmed = false
         targetLockedYaw     = Double.NaN
         alignYawStartTimeMs = 0L
         cmdPitch = 0.0; cmdRoll = 0.0; cmdYaw = 0.0; cmdThrottle = 0.0
@@ -625,6 +706,7 @@ class LandingController {
     private fun triggerFinalLanding(reason: String = "已到机巢交接间隙并稳定对中") {
         if (taskStateRef.get() != TaskState.LANDING || isFinalPhase()) return
         Log.i(TAG, "交给 DJI 自动降落: $reason")
+        OperationLogger.state("视觉降落", "满足交接条件，开始交给 DJI 自动降落：$reason")
         sendZeroVelocity()
         missionState = MissionState.FINAL_LANDING
         finalLandingStartedMs = SystemClock.elapsedRealtime()
@@ -789,11 +871,38 @@ class LandingController {
             stopMission("视觉降落任务超时，交回人工控制"); return
         }
         if (!state.isFlying) { stopMission("视觉交接前飞行状态终止，请检查是否触地及电机状态"); return }
-        if (!state.yaw.isFinite() || !state.pitch.isFinite() || !state.roll.isFinite() || !state.velZ.isFinite()) {
+        if (!state.yaw.isFinite() || !state.pitch.isFinite() || !state.roll.isFinite() ||
+            !state.velX.isFinite() || !state.velY.isFinite() || !state.velZ.isFinite()) {
             stopMission("姿态或速度数据无效"); return
         }
         if (abs(state.pitch) > TILT_LIMIT_DEG || abs(state.roll) > TILT_LIMIT_DEG) { stopMission("姿态越界(防侧翻)"); return }
         if (!isVirtualStickActive) { stopMission("虚拟摇杆未激活"); return }
+        val authority = stickObservation.get()
+        val actualAuthorityValid = authority.timestamp >= authorityRequestedMs &&
+            LandingSafetyPolicy.authorityValid(authority.enabled, authority.advanced, authority.msdkOwner)
+        if (!actualAuthorityValid) {
+            sendZeroVelocity()
+            if (authorityConfirmed || now - authorityRequestedMs > LandingSafetyPolicy.AUTHORITY_TIMEOUT_MS)
+                stopMission("SDK 未确认或已失去 MSDK 高级虚拟摇杆控制权")
+            return
+        }
+        authorityConfirmed = true
+        val cameraDown = LandingSafetyPolicy.gimbalReady(state.gimbalPitch, state.gimbalRoll, state.gimbalRelativeYaw)
+        if (!cameraDown) {
+            sendZeroVelocity()
+            gimbalStableSinceMs = 0L
+            if (downwardCameraReady || now - gimbalPrepareStartedMs > LandingSafetyPolicy.GIMBAL_TIMEOUT_MS)
+                stopMission("云台未稳定到达下视角度或下视姿态已失效")
+            return
+        }
+        if (!downwardCameraReady) {
+            sendZeroVelocity()
+            if (gimbalStableSinceMs == 0L) gimbalStableSinceMs = now
+            if (now - gimbalStableSinceMs < LandingSafetyPolicy.GIMBAL_STABLE_MS) return
+            downwardCameraReady = true
+            searchStartedMs = now
+            Log.i(TAG, "SDK 已确认云台稳定下视，开始识别机巢类型")
+        }
 
         val curMode = lastKnownFlightMode
         if (curMode.isNotEmpty() && !isAllowedFlightMode(curMode)) {
@@ -801,9 +910,21 @@ class LandingController {
             return
         }
 
+        val lockedType = dockSession.lockedType()
+        if (lockedType != null && announcedDockType != lockedType) {
+            announcedDockType = lockedType
+            Log.i(TAG, "本次降落锁定${lockedType.label}，任务结束前禁止切换")
+            OperationLogger.state("视觉降落", "本次机巢类型锁定：${lockedType.label}")
+            onDockTypeLocked?.invoke(lockedType)
+            onMessage?.invoke("已锁定${lockedType.label}")
+        }
+        if (missionState != MissionState.SEARCHING && lockedType == null) {
+            stopMission("尚未确认机巢类型，禁止进入下降流程"); return
+        }
         val v = visionRef.get()
         val isFrameValid = LandingVisionPolicy.isFresh(now, v.timestamp,
-            v.targetId != -1 && v.errX.isFinite() && v.errY.isFinite() &&
+            lockedType != null && v.dockType == lockedType && dockSession.accepts(v.sessionId, lockedType) &&
+                v.targetId != -1 && v.errX.isFinite() && v.errY.isFinite() &&
                 v.depthZ.isFinite() && v.yawDeg.isFinite(), VISION_HOLD_MS)
         val isNewFrame = isFrameValid && v.timestamp > lastValidVisionTimeMs
         if (isNewFrame) {
@@ -813,7 +934,7 @@ class LandingController {
             validVisionFrameCount = min(validVisionFrameCount + 1, REQUIRED_STABLE_FRAMES + 1)
         }
         val neverSeenTarget = lastValidVisionTimeMs == 0L
-        val timeSinceLastValidMs = if (neverSeenTarget) now - landingStartTimeMs else now - lastValidVisionTimeMs
+        val timeSinceLastValidMs = if (neverSeenTarget) now - searchStartedMs else now - lastValidVisionTimeMs
 
         var tPitch = 0.0; var tRoll = 0.0; var tYaw = 0.0; var tThrottle = 0.0
 
@@ -822,6 +943,7 @@ class LandingController {
             !neverSeenTarget && timeSinceLastValidMs > VISION_STALE_MS -> { stopMission("目标丢失超时"); return }
             !isFrameValid -> {
                 validVisionFrameCount = 0
+                alignmentGate.reset()
                 handoffStableSinceMs = 0L
                 descentProgressSinceMs = 0L
                 // 旧测量失效后立即发零速度；不沿用上一帧下降速度做渐变。
@@ -830,22 +952,21 @@ class LandingController {
             else -> {
                 when (missionState) {
                     MissionState.SEARCHING -> {
-                        if (validVisionFrameCount >= REQUIRED_STABLE_FRAMES) {
+                        if (lockedType != null && validVisionFrameCount >= REQUIRED_STABLE_FRAMES) {
                             missionState = MissionState.ALIGN_YAW
                             alignYawStartTimeMs = now
                         }
                     }
                     MissionState.ALIGN_YAW -> {
                         if (now - alignYawStartTimeMs > ALIGN_YAW_TIMEOUT_MS) {
-                            stopMission("双码航向对齐超时")
+                            stopMission("机巢航向对齐超时")
                             return
-                        } else if (!v.yawDeg.isNaN() && abs(v.yawDeg) < ALIGN_YAW_THRESHOLD_DEG) {
+                        } else if (abs(v.yawDeg) < LandingSafetyPolicy.ENTER_YAW_ERROR_DEG) {
                             targetLockedYaw = state.yaw
                             missionState = MissionState.LANDING
                             enterLandingStateTimeMs = now
                         } else if (!v.yawDeg.isNaN()) {
-                            val rawYaw = KP_YAW * v.yawDeg
-                            tYaw = if (abs(rawYaw) < MIN_YAW_VEL) (if (rawYaw > 0) MIN_YAW_VEL else -MIN_YAW_VEL) else rawYaw.coerceIn(-MAX_YAW_VEL, MAX_YAW_VEL)
+                            tYaw = LandingSafetyPolicy.alignmentYawRate(v.yawDeg)
                         }
                         if (now - lastAlignYawLogTime > 200L) { lastAlignYawLogTime = now; Log.d(TAG, "🧭 ALIGN_YAW tYaw=${tYaw}") }
                     }
@@ -873,9 +994,9 @@ class LandingController {
 
                         // 统一使用相机到板面的视觉深度，不能与地面超声高度混用。
                         val depth = v.depthZ
-                        val aligned = radialErr <= DualMarkerLandingConfig.ALIGN_TOLERANCE_M &&
-                            abs(v.yawDeg) < ALIGN_YAW_THRESHOLD_DEG
                         val stable = validVisionFrameCount >= REQUIRED_STABLE_FRAMES
+                        val aligned = alignmentGate.update(radialErr, v.yawDeg, stable)
+                        val settled = LandingSafetyPolicy.motionSettled(state.velX, state.velY, state.velZ, state.pitch, state.roll)
                         if (stable && abs(v.yawDeg) >= ALIGN_YAW_THRESHOLD_DEG) {
                             sendZeroVelocity()
                             handoffStableSinceMs = 0L
@@ -884,10 +1005,10 @@ class LandingController {
                             alignYawStartTimeMs = now
                             return
                         }
-                        val handoffDepth = DualMarkerLandingConfig.handoffDepthM!!
-                        val nestClearance = DualMarkerLandingConfig.nestClearanceM(depth)!!
+                        val handoffDepth = LandingDockGeometry.handoffDepthM(lockedType!!)
+                        val nestClearance = LandingDockGeometry.clearanceM(lockedType, depth)
                         // 保留所有交接前的水平纠偏。低空滞留只触发飞控接管，不认定触地。
-                        val fallbackWindow = aligned && stable && nestClearance >= -0.03 &&
+                        val fallbackWindow = aligned && stable && settled && nestClearance >= -0.03 &&
                             nestClearance <= DualMarkerLandingConfig.handoffClearanceM!! +
                                 DualMarkerLandingConfig.LOW_ALTITUDE_FALLBACK_MARGIN_M && depth > handoffDepth
                         if (fallbackWindow && isNewFrame) {
@@ -902,9 +1023,9 @@ class LandingController {
                         } else if (!fallbackWindow) {
                             descentProgressSinceMs = 0L
                         }
-                        if (LandingVisionPolicy.canHandoff(depth, handoffDepth, radialErr, v.yawDeg, stable)) {
+                        if (aligned && settled && LandingVisionPolicy.canHandoff(depth, handoffDepth, radialErr, v.yawDeg, stable)) {
                             if (handoffStableSinceMs == 0L) handoffStableSinceMs = now
-                            if (isNewFrame && now - handoffStableSinceMs >= 500L) {
+                            if (isNewFrame && now - handoffStableSinceMs >= LandingSafetyPolicy.HANDOFF_STABLE_MS) {
                                 triggerFinalLanding()
                                 return
                             }
@@ -959,6 +1080,8 @@ class LandingController {
             val ultra = km.getValue(KeyTools.createKey(FlightControllerKey.KeyUltrasonicHeight))?.toDouble()?.div(10.0)
             val att = km.getValue(KeyTools.createKey(FlightControllerKey.KeyAircraftAttitude))
             val vel = km.getValue(KeyTools.createKey(FlightControllerKey.KeyAircraftVelocity))
+            val gimbal = km.getValue(KeyTools.createKey(GimbalKey.KeyGimbalAttitude, currentCameraIndex))
+            val relativeYaw = km.getValue(KeyTools.createKey(GimbalKey.KeyYawRelativeToAircraftHeading, currentCameraIndex))
             val mode = km.getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode))?.name
             if (!mode.isNullOrEmpty()) lastKnownFlightMode = mode
 
@@ -972,9 +1095,17 @@ class LandingController {
             aircraftStateRef.set(AircraftState(
                 isFlying = isFlying, altitude = alt,
                 ultrasonicHeight = if (ultra != null && ultra > 0.0) ultra else Double.NaN,
-                pitch = att?.pitch ?: prev.pitch, roll = att?.roll ?: prev.roll,
-                yaw = att?.yaw ?: prev.yaw, velZ = vel?.z ?: prev.velZ
+                pitch = att?.pitch ?: Double.NaN, roll = att?.roll ?: Double.NaN,
+                yaw = att?.yaw ?: Double.NaN, velX = vel?.x ?: Double.NaN,
+                velY = vel?.y ?: Double.NaN, velZ = vel?.z ?: Double.NaN,
+                gimbalPitch = gimbal?.pitch ?: Double.NaN, gimbalRoll = gimbal?.roll ?: Double.NaN,
+                gimbalRelativeYaw = relativeYaw ?: Double.NaN
             ))
+        }.onFailure {
+            // 整次读取失败时也不能把上一轮姿态/速度当作仍然有效。
+            aircraftStateRef.updateAndGet { previous -> previous.copy(yaw = Double.NaN, velX = Double.NaN,
+                velY = Double.NaN, velZ = Double.NaN, gimbalPitch = Double.NaN) }
+            Log.w(TAG, "飞行遥测读取失败", it)
         }
     }
 
@@ -1034,6 +1165,15 @@ class LandingController {
             pitch = pitchDeg.coerceIn(-90.0, 70.0)
             duration = 1.0
         }
-        runCatching { KeyManager.getInstance().performAction(KeyTools.createKey(GimbalKey.KeyRotateByAngle, currentCameraIndex), rotation, null) }
+        val generation = missionGeneration
+        runCatching { KeyManager.getInstance().performAction(KeyTools.createKey(GimbalKey.KeyRotateByAngle, currentCameraIndex), rotation,
+            object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
+                override fun onSuccess(value: EmptyMsg?) = Unit // 接受请求不等于到位，由实际角度检查确认。
+                override fun onFailure(error: IDJIError) {
+                    controlHandler.post {
+                        if (generation == missionGeneration) dispatchError("下视云台请求失败: ${error.description()}")
+                    }
+                }
+            }) }.onFailure { dispatchError("无法请求云台下视: ${it.message}") }
     }
 }

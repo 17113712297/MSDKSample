@@ -6,6 +6,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import com.example.msdksample.logs.OperationLogger
+import com.example.msdksample.logs.OperationCommandNames
 import androidx.core.app.NotificationCompat
 import dji.v5.manager.aircraft.payload.PayloadCenter
 import dji.v5.manager.aircraft.payload.PayloadIndexType
@@ -66,22 +68,30 @@ class DroneControlService : Service() {
         var isVelocityPanelActive = false
 
         fun sendFrame(data: ByteArray) {
+            val cmd = data.getOrNull(1)
+            val record = cmd != null && OperationCommandNames.shouldRecord(cmd)
+            val name = cmd?.let { OperationCommandNames.name(it) }.orEmpty()
+            if (record) OperationLogger.state("发送机载", "请求发送：$name")
             val mgr = try {
                 PayloadCenter.getInstance().payloadManager[PayloadIndexType.UP]
             } catch (e: Throwable) {
                 Log.w(TAG, "sendFrame: payloadManager 访问异常: ${e.message}")
+                if (record) OperationLogger.result("发送机载", false, "$name：通信接口不可用")
                 return
             } ?: run {
                 Log.w(TAG, "sendFrame: payloadManager 为空")
+                if (record) OperationLogger.result("发送机载", false, "$name：机载通信未就绪")
                 return
             }
             mgr.sendDataToPayload(data,
                 object : dji.v5.common.callback.CommonCallbacks.CompletionCallback {
                     override fun onSuccess() {
                         Log.i(TAG, "Frame sent (${data.size}B)")
+                        if (record) OperationLogger.result("发送机载", true, "$name：链路发送成功")
                     }
                     override fun onFailure(error: dji.v5.common.error.IDJIError) {
                         Log.w(TAG, "Frame send failed: ${error.description()}")
+                        if (record) OperationLogger.result("发送机载", false, "$name：${error.description()}")
                     }
                 }
             )
@@ -157,6 +167,9 @@ class DroneControlService : Service() {
 
     // ── 帧分发 ────────────────────────────────────────────
     private fun dispatchFrame(frame: DroneCommProtocol.ParsedFrame) {
+        if (OperationCommandNames.shouldRecord(frame.cmd)) {
+            OperationLogger.record("远端指令", "机载→遥控器", "收到：${OperationCommandNames.name(frame.cmd)}")
+        }
         val visualLandingActive = landingController?.getTaskState()?.let { it != TaskState.INACTIVE } == true
         if (visualLandingActive && frame.cmd == DroneCommProtocol.CMD_HOVER) {
             landingController?.stopMission("远端请求悬停，中止视觉降落")
@@ -167,7 +180,8 @@ class DroneControlService : Service() {
         if (visualLandingActive && frame.cmd in setOf(
                 DroneCommProtocol.CMD_TAKEOFF, DroneCommProtocol.CMD_LAND,
                 DroneCommProtocol.CMD_VEL, DroneCommProtocol.CMD_GIMBAL_YAW_FOLLOW,
-                DroneCommProtocol.CMD_GIMBAL_ANGLE, DroneCommProtocol.CMD_CAM_ZOOM)) {
+                DroneCommProtocol.CMD_GIMBAL_ANGLE, DroneCommProtocol.CMD_CAM_ZOOM,
+                DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF)) {
             sendAck(frame.cmd, DroneCommProtocol.ACK_FAIL)
             return
         }
@@ -357,10 +371,10 @@ class DroneControlService : Service() {
                 Log.i(TAG, "来自 Jetson: 起飞前检查")
                 val ctrl = preflightController
                 if (ctrl != null && !isVelocityPanelActive) {
-                    onResetVisionTracking?.invoke() // 自检前也同步清理历史缓存
-                    onStartCameraStream?.invoke()
-                    mainHandler.post { ctrl.startCheck() }
-                    sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, DroneCommProtocol.ACK_OK)
+                    mainHandler.post {
+                        // 控制器原子取得相机/云台租约后，才回成功并触发开流回调。
+                        sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, ackOf(ctrl.startCheck()))
+                    }
                 } else {
                     Log.w(TAG, "preflightController 未注入")
                     sendAck(DroneCommProtocol.CMD_CHECK_BEFORE_TAKEOFF, DroneCommProtocol.ACK_FAIL)
@@ -382,12 +396,10 @@ class DroneControlService : Service() {
                     sendAck(DroneCommProtocol.CMD_VISION_LANDING, DroneCommProtocol.ACK_FAIL)
                     return
                 }
-                if (ctrl != null && DualMarkerLandingConfig.landingError() == null && !isVelocityPanelActive) {
+                if (ctrl != null && LandingDockGeometry.landingError() == null && !isVelocityPanelActive) {
                     if (!landingCommandPending.compareAndSet(false, true)) return
                     val posted = runCatching {
-                        // 先在当前 Binder 线程立即触发重置，消除主线程排队带来的时序滞后风险
-                        onResetVisionTracking?.invoke()
-                        onStartCameraStream?.invoke()
+                        // 开流/重置由控制器获准准备后的回调统一触发，不能抢占正在运行的预检。
 
                         // 只有确认着陆和停桨后才发送完成通知。
                         ctrl.onLandingSucceed = {
@@ -444,6 +456,9 @@ class DroneControlService : Service() {
                 if (frame.payload.size >= 2) {
                     val originalCmd = frame.payload[0]
                     val ok = frame.payload[1] == DroneCommProtocol.ACK_OK
+                    if (OperationCommandNames.shouldRecord(originalCmd)) {
+                        OperationLogger.result("机载回执", ok, "${OperationCommandNames.name(originalCmd)}：${if (ok) "机载已受理" else "机载拒绝或执行失败"}")
+                    }
                     val cmdName = when (originalCmd.toInt() and 0xFF) {
                         DroneCommProtocol.CMD_MAPPING_START.toInt() and 0xFF,
                         DroneCommProtocol.CMD_MAPPING_SAVE_MAP.toInt() and 0xFF,
@@ -596,6 +611,10 @@ class DroneControlService : Service() {
     }
 
     private fun sendAck(ackedCmd: Byte, status: Byte) {
+        if (OperationCommandNames.shouldRecord(ackedCmd)) {
+            OperationLogger.result("遥控器受理结果", status == DroneCommProtocol.ACK_OK,
+                "${OperationCommandNames.name(ackedCmd)}：${if (status == DroneCommProtocol.ACK_OK) "已受理" else "未受理"}")
+        }
         val mgr = try {
             PayloadCenter.getInstance().payloadManager[payloadIndex]
         } catch (e: Throwable) {
@@ -619,6 +638,9 @@ class DroneControlService : Service() {
     }
 
     private fun sendNotification(cmd: Byte) {
+        if (OperationCommandNames.shouldRecord(cmd)) {
+            OperationLogger.state("飞行动作", "实际动作完成，准备通知机载：${OperationCommandNames.name(cmd)}")
+        }
         val mgr = try {
             PayloadCenter.getInstance().payloadManager[payloadIndex]
         } catch (e: Throwable) {
