@@ -34,6 +34,7 @@ import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.DJIKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.key.KeyTools
+import dji.sdk.keyvalue.key.ProductKey
 import dji.sdk.keyvalue.value.camera.CameraVideoStreamSourceType
 import dji.sdk.keyvalue.value.common.Attitude
 import dji.sdk.keyvalue.value.common.CameraLensType
@@ -129,6 +130,14 @@ class MainActivity : AppCompatActivity() {
 
     private var currentCameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 
+    // ── FPV 视频源兜底 ──────────────────────────────────────────
+    // onAvailableCameraUpdated 只在"相机可用性变化"时回调一次。重装 App 后是冷启动，
+    // 飞机早已连接，SDK 可能在 Activity 注册监听之前就发完这次回调 → FPVWidget 的视频源
+    // 一直停在 UNKNOWN，表现为"遥控器连着、遥测正常，但画面全黑"。
+    private val fpvSourceHandler = Handler(Looper.getMainLooper())
+    private var fpvSourceConfirmed = false
+    private var fpvFallbackLensApplied = false
+
     private val cameraSourceProcessor = DataProcessor.create(
         Pair(ComponentIndexType.UNKNOWN, CameraLensType.UNKNOWN)
     )
@@ -214,8 +223,61 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            override fun onCameraStreamEnableUpdate(map: MutableMap<ComponentIndexType, Boolean>) = Unit
+            override fun onCameraStreamEnableUpdate(map: MutableMap<ComponentIndexType, Boolean>) {
+                Log.d(TAG, "onCameraStreamEnableUpdate: $map")
+                if (map[currentCameraIndex] == false) {
+                    Log.w(TAG, "当前相机流被关闭，500 ms 后重新绑定 FPV 源")
+                    fpvSourceHandler.postDelayed({
+                        fpvSourceConfirmed = false
+                        ensureFpvSource("stream-disabled")
+                    }, 500L)
+                }
+            }
         }
+
+    /**
+     * 兜底设置 FPV 视频源。
+     *
+     * 正常情况下由 [availableCameraUpdatedListener] 回调设置；但该回调是一次性的，
+     * 冷启动（尤其是重装后）可能赶在监听注册之前就发完，此时需要主动补一次。
+     * 已通过 StreamSource 回调确认过源时直接返回，不影响正常流程。
+     */
+    private fun ensureFpvSource(reason: String) {
+        if (!::fpvWidget.isInitialized) return
+        if (fpvSourceConfirmed) return
+        val source = currentCameraIndex.takeIf { it != ComponentIndexType.UNKNOWN }
+            ?: ComponentIndexType.LEFT_OR_MAIN
+        Log.i(TAG, "ensureFpvSource($reason) -> $source")
+        fpvWidget.updateVideoSource(source)
+    }
+
+    /**
+     * 启动后按 1 s / 3 s / 6 s 补设 FPV 源；一旦收到 StreamSource 回调就停止。
+     * 最后一次仍未确认时强制切一次广角（等价于操作员手动点"广角"），这是已知最有效的自救。
+     */
+    private fun scheduleFpvSourceRetries() {
+        fpvSourceHandler.removeCallbacksAndMessages(null)
+        val retries = longArrayOf(1_000L, 3_000L, 6_000L)
+        retries.forEachIndexed { index, delay ->
+            fpvSourceHandler.postDelayed({
+                if (fpvSourceConfirmed) return@postDelayed
+                ensureFpvSource("retry#$index")
+                if (index == retries.lastIndex && !fpvSourceConfirmed && !fpvFallbackLensApplied) {
+                    // 没连飞机时不要发镜头指令，否则会弹一条"切换失败"的 Toast
+                    val connected = runCatching {
+                        KeyManager.getInstance().getValue(KeyTools.createKey(ProductKey.KeyConnection))
+                    }.getOrNull() == true
+                    if (connected) {
+                        fpvFallbackLensApplied = true
+                        Log.w(TAG, "FPV 源 6 s 未确认，强制切一次广角")
+                        switchLens(CameraVideoStreamSourceType.WIDE_CAMERA)
+                    } else {
+                        Log.i(TAG, "FPV 源未确认且飞机未连接，跳过强制切广角")
+                    }
+                }
+            }, delay)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -318,6 +380,11 @@ class MainActivity : AppCompatActivity() {
         fpvWidget.setOnFPVStreamSourceListener(object : FPVStreamSourceListener {
             override fun onStreamSourceUpdated(pos: ComponentIndexType, lens: CameraLensType) {
                 Log.d(TAG, "onStreamSourceUpdated: pos=$pos lens=$lens")
+                if (pos != ComponentIndexType.UNKNOWN && lens != CameraLensType.UNKNOWN) {
+                    // 视频源已真正建立，停止兜底重试
+                    fpvSourceConfirmed = true
+                    fpvSourceHandler.removeCallbacksAndMessages(null)
+                }
                 cameraSourceProcessor.onNext(Pair(pos, lens))
             }
         })
@@ -325,6 +392,10 @@ class MainActivity : AppCompatActivity() {
         MediaDataCenter.getInstance()
             .getCameraStreamManager()
             .addAvailableCameraUpdatedListener(availableCameraUpdatedListener)
+
+        // 冷启动兜底：注册监听后立刻设一次默认源，并按 1/3/6 秒重试（回调可能已提前发完）
+        ensureFpvSource("startup")
+        scheduleFpvSourceRetries()
 
         setupLensButtons()
         setupWaypointButtons()
@@ -356,6 +427,9 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         motorTemperatureMonitor?.start()
+        // 从权限弹窗/后台回来时补一次视频源（权限确认晚于 Activity 创建的情况）
+        ensureFpvSource("resume")
+        if (!fpvSourceConfirmed) scheduleFpvSourceRetries()
         if (::liveStreamController.isInitialized) {
             liveStreamController.bind()
             liveStreamController.updateLiveStreamCameraSource(currentCameraIndex)
@@ -372,10 +446,13 @@ class MainActivity : AppCompatActivity() {
                 .subscribe(
                     { (pos, lens) ->
                         if (pos != ComponentIndexType.UNKNOWN) {
-                            updateViewVisibility(lens)
-                            updateAllWidgetSource(pos, lens)
-                            updateLensButtonState(lens)
-                            DroneControlService.updateCurrentLens(lensTypeToCode(lens))
+                            // FPV 回调里的 lens 有时滞后/不准，优先用相机 Key 的真实镜头选择，
+                            // 否则"切到变焦但滑条不出现"（lens 仍报广角）会一直复现。
+                            val authoritative = readLensFromKey()
+                            applyCameraLensUi(
+                                pos,
+                                if (authoritative != null) lensForStream(authoritative) else lens
+                            )
                         }
                     },
                     { e -> Log.e(TAG, "cameraSource error: ${e.message}") }
@@ -405,6 +482,7 @@ class MainActivity : AppCompatActivity() {
         operationLogDialog = null
         motorTemperatureMonitor?.stop()
         pollHandler.removeCallbacks(autoStartLiveStreamRunnable)
+        fpvSourceHandler.removeCallbacksAndMessages(null)
         MediaDataCenter.getInstance()
             .getCameraStreamManager()
             .removeAvailableCameraUpdatedListener(availableCameraUpdatedListener)
@@ -1275,6 +1353,10 @@ class MainActivity : AppCompatActivity() {
                     Log.d(TAG, "切换成功 -> $target")
                     OperationLogger.result("镜头", true, "镜头已切换：$target")
                     DroneControlService.updateCurrentLens(streamTypeToCode(target))
+                    // 立刻按用户意图刷新 UI（不等 FPV 回调），否则变焦滑条可能一直不出现。
+                    runOnUiThread { applyCameraLensUi(currentCameraIndex, lensForStream(target)) }
+                    // 800 ms 后再按相机 Key 的真实值对一次，避免 SDK 推迟生效导致状态不一致。
+                    pollHandler.postDelayed({ refreshCameraLensUi("switch+800ms") }, 800L)
                     if (::liveStreamController.isInitialized) {
                         liveStreamController.updateLiveStreamCameraSource(currentCameraIndex)
                         liveStreamController.refreshConfiguredStreamAddress()
@@ -1321,6 +1403,34 @@ class MainActivity : AppCompatActivity() {
         recordVideoWidget.updateCameraSource(pos, lens)
         focalZoomWidget.updateCameraSource(pos, lens)
         photoVideoSwitchWidget.updateCameraSource(pos, lens)
+    }
+
+    /** 从相机 Key 读出当前真实的镜头选择；比 FPV 回调里的 lens 更权威。 */
+    private fun readLensFromKey(): CameraVideoStreamSourceType? = runCatching {
+        KeyManager.getInstance().getValue(
+            KeyTools.createKey(CameraKey.KeyCameraVideoStreamSource, currentCameraIndex)
+        )
+    }.getOrNull()
+
+    private fun lensForStream(t: CameraVideoStreamSourceType?): CameraLensType = when (t) {
+        CameraVideoStreamSourceType.ZOOM_CAMERA -> CameraLensType.CAMERA_LENS_ZOOM
+        CameraVideoStreamSourceType.INFRARED_CAMERA -> CameraLensType.CAMERA_LENS_THERMAL
+        else -> CameraLensType.CAMERA_LENS_WIDE
+    }
+
+    /** 镜头相关的 UI（变焦滑条可见性、拍摄控件源、镜头按钮高亮）统一从这里刷。 */
+    private fun applyCameraLensUi(pos: ComponentIndexType, lens: CameraLensType) {
+        updateViewVisibility(lens)
+        updateAllWidgetSource(pos, lens)
+        updateLensButtonState(lens)
+        DroneControlService.updateCurrentLens(lensTypeToCode(lens))
+    }
+
+    private fun refreshCameraLensUi(reason: String) {
+        val src = readLensFromKey()
+        val lens = lensForStream(src)
+        Log.i(TAG, "refreshCameraLensUi($reason): src=$src lens=$lens")
+        runOnUiThread { applyCameraLensUi(currentCameraIndex, lens) }
     }
 
     private fun lensTypeToCode(lens: CameraLensType): Byte = when (lens) {

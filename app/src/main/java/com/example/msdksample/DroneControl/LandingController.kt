@@ -51,7 +51,15 @@ class LandingController(private val operations: VisionOperationGate) {
         const val TAG = "LandingController"
         const val CONTROL_INTERVAL     = 50L
         const val TELEMETRY_INTERVAL   = 500L
-        const val ALIGN_YAW_TIMEOUT_MS = 15_000L
+        /**
+         * 航向对齐超时。
+         *
+         * 由 15 s 放宽到 25 s：返航掉头需要 180° 时，旧机巢视觉帧率约 2 fps，
+         * 15 s 只能转过 135° 左右就中止；加入"失帧保持 300 ms"后正常 12~13 s 完成，
+         * 但帧率掉到 1.5~1.7 fps 时需要 18~20 s。25 s 只作为兜底，正常根本走不到。
+         * 总任务超时 120 s 不受影响（对齐最多多花 10 s）。
+         */
+        const val ALIGN_YAW_TIMEOUT_MS = 25_000L
         const val VISION_STALE_MS      = 5_000L
         const val VISION_HOLD_MS       = 200L
         const val INITIAL_SEARCH_TIMEOUT_MS = 8_000L
@@ -171,6 +179,9 @@ class LandingController(private val operations: VisionOperationGate) {
     private var cmdYaw      = 0.0
     private var cmdThrottle = 0.0
     private val alignmentGate = LandingAlignmentGate()
+    /** 最近视觉有效帧速率，用于"高帧率才允许大角度快转"（见 ALIGN_YAW_FAST_MIN_FPS） */
+    private val frameRate = FrameRateEstimator()
+    private var holdYawLogMs = 0L
     @Volatile private var downwardCameraReady = false
     private var gimbalStableSinceMs = 0L
     private var gimbalPrepareStartedMs = 0L
@@ -674,6 +685,8 @@ class LandingController(private val operations: VisionOperationGate) {
 
     private fun resetControlState() {
         alignmentGate.reset()
+        frameRate.reset()
+        holdYawLogMs = 0L
         downwardCameraReady = false
         gimbalStableSinceMs = 0L
         searchStartedMs = 0L
@@ -932,8 +945,11 @@ class LandingController(private val operations: VisionOperationGate) {
                 validVisionFrameCount = 0
             lastValidVisionTimeMs = v.timestamp
             validVisionFrameCount = min(validVisionFrameCount + 1, REQUIRED_STABLE_FRAMES + 1)
+            frameRate.record(v.timestamp)
         }
         val neverSeenTarget = lastValidVisionTimeMs == 0L
+        // 最近有效帧速率（Hz），决定大角度时是否允许把角速度上限从 20 提到 35 °/s
+        val recentFps = frameRate.hz()
         val timeSinceLastValidMs = if (neverSeenTarget) now - searchStartedMs else now - lastValidVisionTimeMs
 
         var tPitch = 0.0; var tRoll = 0.0; var tYaw = 0.0; var tThrottle = 0.0
@@ -946,8 +962,21 @@ class LandingController(private val operations: VisionOperationGate) {
                 alignmentGate.reset()
                 handoffStableSinceMs = 0L
                 descentProgressSinceMs = 0L
-                // 旧测量失效后立即发零速度；不沿用上一帧下降速度做渐变。
-                cmdPitch = 0.0; cmdRoll = 0.0; cmdYaw = 0.0; cmdThrottle = 0.0
+                // 平移/升降仍然立即清零。
+                cmdPitch = 0.0; cmdRoll = 0.0; cmdThrottle = 0.0
+                // 航向允许"限时保持"：视觉帧率偏低时若每个失效帧都把角速度清 0，
+                // 加速度限幅（30 °/s²）会让有效转速掉到命令值的 1/3，180° 转头必然撞超时。
+                // 保持 300 ms 的过冲上界只有当次误差的 24%，下一帧立即按新误差回算，不会摆动。
+                val turning = missionState == MissionState.ALIGN_YAW || missionState == MissionState.LANDING
+                if (turning && LandingSafetyPolicy.shouldHoldYaw(now, lastValidVisionTimeMs)) {
+                    tYaw = cmdYaw   // 维持当前角速度，交给末尾的加速度限幅平滑
+                    if (now - holdYawLogMs >= 500L) {
+                        holdYawLogMs = now
+                        Log.d(TAG, "🧭 视觉帧失效，保持 yaw ${"%.1f".format(cmdYaw)}°/s（≤${LandingSafetyPolicy.YAW_HOLD_MS}ms）")
+                    }
+                } else {
+                    cmdYaw = 0.0
+                }
             }
             else -> {
                 when (missionState) {
@@ -966,9 +995,13 @@ class LandingController(private val operations: VisionOperationGate) {
                             missionState = MissionState.LANDING
                             enterLandingStateTimeMs = now
                         } else if (!v.yawDeg.isNaN()) {
-                            tYaw = LandingSafetyPolicy.alignmentYawRate(v.yawDeg)
+                            // 误差 >30° 且视觉帧率 ≥3 fps 时上限放到 35 °/s（C），否则维持 20 °/s。
+                            tYaw = LandingSafetyPolicy.alignmentYawRate(v.yawDeg, recentFps)
                         }
-                        if (now - lastAlignYawLogTime > 200L) { lastAlignYawLogTime = now; Log.d(TAG, "🧭 ALIGN_YAW tYaw=${tYaw}") }
+                        if (now - lastAlignYawLogTime > 200L) {
+                            lastAlignYawLogTime = now
+                            Log.d(TAG, "🧭 ALIGN_YAW err=${"%.1f".format(v.yawDeg)}° tYaw=${"%.1f".format(tYaw)}°/s fps=${"%.1f".format(recentFps)}")
+                        }
                     }
                     MissionState.LANDING -> {
                         if (enterLandingStateTimeMs == 0L) enterLandingStateTimeMs = now

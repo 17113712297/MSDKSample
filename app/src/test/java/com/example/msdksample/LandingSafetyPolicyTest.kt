@@ -83,6 +83,43 @@ class LandingSafetyPolicyTest {
         assertEquals(0.0, LandingSafetyPolicy.alignmentYawRate(Double.NaN), 1e-9)
     }
 
+    /** C：大角度 + 帧率健康时才把上限从 20 提到 35 °/s */
+    @Test fun largeYawErrorUsesFastCapOnlyAtHealthyFrameRate() {
+        assertEquals(35.0, LandingSafetyPolicy.alignmentYawRate(100.0, 5.0), 1e-9)
+        assertEquals(-35.0, LandingSafetyPolicy.alignmentYawRate(-100.0, 5.0), 1e-9)
+        assertEquals(20.0, LandingSafetyPolicy.alignmentYawRate(100.0, 2.9), 1e-9)  // 帧率不足，不放大
+        assertEquals(20.0, LandingSafetyPolicy.alignmentYawRate(25.0, 5.0), 1e-9)   // 误差不足，不放大
+        assertEquals(20.0, LandingSafetyPolicy.alignmentYawRate(30.0, 5.0), 1e-9)   // 恰好 30° 仍走常规上限
+        assertEquals(12.0, LandingSafetyPolicy.alignmentYawRate(15.0, 5.0), 1e-9)   // 比例段不受上限影响
+    }
+
+    /** A：丢帧时只允许在 300 ms 窗口内保持 yaw 角速度 */
+    @Test fun yawHoldWindowIsBounded() {
+        assertEquals(300L, LandingSafetyPolicy.YAW_HOLD_MS)
+        assertFalse(LandingSafetyPolicy.shouldHoldYaw(1000, 0))        // 还没看到过目标
+        assertTrue(LandingSafetyPolicy.shouldHoldYaw(1000, 1000))
+        assertTrue(LandingSafetyPolicy.shouldHoldYaw(1300, 1000))      // 刚好 300 ms
+        assertFalse(LandingSafetyPolicy.shouldHoldYaw(1301, 1000))     // 超窗口不再保持
+        assertFalse(LandingSafetyPolicy.shouldHoldYaw(1000, 1200))     // 时间倒退不保持
+    }
+
+    @Test fun frameRateEstimatorIgnoresDuplicatesAndStaleFrames() {
+        val est = FrameRateEstimator(window = 4)
+        assertEquals(0.0, est.hz(), 1e-9)
+        est.record(1000)
+        assertEquals(0.0, est.hz(), 1e-9)          // 单帧无法估计
+        est.record(1100)
+        assertEquals(10.0, est.hz(), 1e-9)
+        est.record(1200); est.record(1300); est.record(1400)
+        assertEquals(10.0, est.hz(), 1e-9)
+        est.record(1400)                            // 重复时间戳不计
+        assertEquals(10.0, est.hz(), 1e-9)
+        est.record(2000)                            // 窗口滑到 1200..2000 → 3 段 / 0.8 s
+        assertEquals(3.75, est.hz(), 1e-9)
+        est.reset()
+        assertEquals(0.0, est.hz(), 1e-9)
+    }
+
     @Test fun calibratedIntrinsicsScaleButDoNotSilentlyAcceptDifferentCrop() {
         val source = LandingCameraCalibration(1920, 1080, 1400.0, 1390.0, 960.0, 530.0,
             listOf(-0.1, 0.02, 0.001, 0.0, 0.0))
