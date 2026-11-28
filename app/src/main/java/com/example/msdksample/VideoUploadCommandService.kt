@@ -36,7 +36,9 @@ class VideoUploadCommandService : Service() {
         videoTransferManager = VideoTransferManager(
             context = applicationContext,
             streamAddressProvider = { streamController.getConfiguredStreamAddress() },
-            cameraIndexProvider = { ComponentIndexType.LEFT_OR_MAIN }
+            cameraIndexProvider = { ComponentIndexType.LEFT_OR_MAIN },
+            photoStore = WaypointPhotoStore(applicationContext),
+            enabledProvider = { MediaTransferPreferences.isAutoUploadEnabled(this) }
         ).also { manager ->
             manager.statusCallback = { status -> Log.i(TAG, status) }
             manager.onTransferFinished = { success, summary ->

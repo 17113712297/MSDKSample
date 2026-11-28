@@ -5,6 +5,20 @@
         <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnOperationLogs" style="@style/DashboardButton" android:text="操作日志" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
         <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnModeSettings" style="@style/DashboardButton" android:text="连接设置" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
     </LinearLayout>
+    <TextView style="@style/DashboardSection" android:text="媒体上传" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginEnd="8dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="自动上传视频与图片" android:textColor="#FFFFFF" android:textSize="14sp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:text="关闭后停录不拉取视频，到点也不抓图" android:textColor="#8899AABB" android:textSize="11sp" />
+        </LinearLayout>
+        <androidx.appcompat.widget.SwitchCompat android:id="@+id/swToolsAutoUpload" android:layout_width="wrap_content" android:layout_height="wrap_content" android:checked="true" />
+    </LinearLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnRetryFailedUpload" style="@style/DashboardButton" android:text="补传失败媒体" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="4dp" />
+        <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnClearMediaFiles" style="@style/DashboardButton" android:text="清除媒体文件" android:layout_width="0dp" android:layout_weight="1" android:layout_marginStart="4dp" />
+    </LinearLayout>
+    <TextView style="@style/DashboardHint" android:text="补传失败媒体：把自动上传失败的视频和照片重新上传到前端，成功后自动删除遥控器副本。" />
+    <TextView style="@style/DashboardHint" android:text="清除媒体文件：删除无人机 SD 卡以及遥控器上的全部视频、图片（含待补传文件），不可恢复。" />
     <TextView style="@style/DashboardSection" android:text="图传直播" />
     <androidx.appcompat.widget.AppCompatButton android:id="@+id/btnLiveStreamPanel" style="@style/DashboardButton" android:text="展开直播设置" />
     <LinearLayout android:id="@+id/liveStreamLayout" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone">

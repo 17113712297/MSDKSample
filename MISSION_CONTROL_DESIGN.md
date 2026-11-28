@@ -231,7 +231,7 @@ PSDK 数据通道是**有序可靠**的点对点字节流（类似管道），�
 所以最终只做两件事：
 
 1. `indooruav_core` 增加 `Paused` / `Return` 两个状态和 4 个事件
-2. `waypoint_tracker` 增加 `RETURNING` / `RETURN_FINISHED` 两个状态和 1 个 `return` 服务
+2. `waypoint_tracker` 增加 `RETURNING` / `RETURN_ALIGN` / `RETURN_FINISHED` 三个状态和 1 个 `return` 服务
 
 ```
 Cruise ──PauseCommand──► Paused ──ResumeCommand──► Cruise
@@ -330,7 +330,9 @@ RC 侧可选加一道本地闸门（收到 `CMD_VEL` 直接丢弃），作为"Je
   │             │◄── state="Return" ────────┤
   │ 显示"返航中" │                           │
   │             │◄── CMD_VEL（反向）────────┤ 每到达一个航点 index -= 1
-  │             │                           │ 到达 index 0 → RETURN_FINISHED
+  │             │                           │ 到达 index 0 → RETURN_ALIGN
+  │             │◄── CMD_VEL（只转 yaw）────┤   原地再转 180°（降前对准）
+  │             │                           │ 对准到位 → RETURN_FINISHED
   │             │                           │   └─ 调 return_complete 事件
   │             │                           │ state_machine_event/return_complete
   │             │                           │ indooruav_core: Return → Land
@@ -347,7 +349,12 @@ RC 侧可选加一道本地闸门（收到 `CMD_VEL` 直接丢弃），作为"Je
    不翻转会长距离倒飞。翻转后机头始终朝行进方向。
 3. **返航途中不发布 `stop_arrived`**。该话题会触发前端的航点拍照/回传逻辑，  
    反向经过同一个停留点时不应重复触发。
-4. **到达 index 0 后不自己降落**，只发 `return_complete`，由状态机切 `Land` 走原有视觉降落流程。
+4. **到达 index 0 后先做"降前对准"**：进入 `RETURN_ALIGN`，在原地再旋转
+   `return_align_extra_yaw_deg`（默认 180°），转到位才进 `RETURN_FINISHED` 发 `return_complete`。  
+   目的：机头转回便于降落/对准降落标的的朝向。转完不自己降落，由状态机切 `Land` 走原有视觉降落流程。  
+   转速由 `return_align_duration_s`（默认 10 s）反算：180°/10 s ≈ 18°/s，不受巡航的
+   `yaw_speed_dps=10` 约束（对准阶段临时把 yaw 限幅器 v_max 抬到该值，进入 `RETURN_FINISHED` 时恢复）。
+   实测会比标称多 0.5 s 左右（限幅器加减速 + 末端 P 收敛到 `yaw_rotation_tolerance_deg`=5°）。
 5. **返航中不支持暂停**（状态机显式拒绝）。返航是终止流程，要中断就接管或直接降落。
 
 **返航中的"继续"键必须置灰**，否则操作员会试图在返航途中恢复正向追踪，行为不可预测。

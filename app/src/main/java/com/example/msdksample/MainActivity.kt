@@ -1,7 +1,11 @@
 package com.example.msdksample
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.ColorStateList
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -33,6 +37,7 @@ import com.example.msdksample.transfer.VideoTransferManager
 import dji.sdk.keyvalue.key.CameraKey
 import dji.sdk.keyvalue.key.DJIKey
 import dji.sdk.keyvalue.key.FlightControllerKey
+import dji.sdk.keyvalue.key.GimbalKey
 import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.key.ProductKey
 import dji.sdk.keyvalue.value.camera.CameraVideoStreamSourceType
@@ -57,6 +62,7 @@ import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
 import io.reactivex.rxjava3.disposables.CompositeDisposable
 import org.opencv.android.OpenCVLoader
 import android.os.SystemClock
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -68,6 +74,12 @@ class MainActivity : AppCompatActivity() {
         const val POLL_INTERVAL = 500L
         const val AUTO_STREAM_RETRY_DELAY_MS = 3_000L
         const val AUTO_STREAM_MAX_ATTEMPTS = 10
+
+        /** 媒体传输提示条的停留时间：最后一条消息之后 3 秒自动消失 */
+        const val TRANSIENT_STATUS_DURATION_MS = 3_000L
+
+        /** 调试包仿真广播 action（release 包不注册接收器） */
+        const val DEBUG_SIM_ACTION = "com.example.msdksample.DEBUG_SIM"
     }
 
     private lateinit var fpvWidget: FPVWidget
@@ -103,6 +115,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var taskStatusText: TextView
     private lateinit var missionStatusText: TextView
     private lateinit var motorTemperatureText: TextView
+    private lateinit var gimbalPitchText: TextView
+    private lateinit var gimbalRollText: TextView
+    private lateinit var gimbalYawText: TextView
+    private lateinit var transientStatusLayout: LinearLayout
+    private lateinit var transientStatusText: TextView
+    private var transientStatusHideRunnable: Runnable? = null
+    /** 设置页与工具页的“媒体自动上传”开关，任一变化时互相同步 */
+    private val mediaUploadSwitches = mutableListOf<androidx.appcompat.widget.SwitchCompat>()
+    private var syncingMediaUploadSwitch = false
     private lateinit var functionMenu: FlightMenuController
     private lateinit var operationWorkspace: OperationWorkspaceController
     private var collectionWorkspaceActive = false
@@ -158,6 +179,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var liveStreamController: LiveStreamController
     private lateinit var deviceStatusReportManager: DeviceStatusReportManager
     private lateinit var videoTransferManager: VideoTransferManager
+    private lateinit var photoStore: WaypointPhotoStore
+    private var photoCapturer: WaypointPhotoCapturer? = null
+    private var photoCameraController: CameraController? = null
     private lateinit var landingController: LandingController
     private lateinit var preflightController: PreflightController
     private var operationLogDialog: OperationLogDialog? = null
@@ -188,6 +212,7 @@ class MainActivity : AppCompatActivity() {
             pollVelocity()
             pollYawRate()
             pollRemainingFlightTime()
+            pollGimbalAttitude()
             pollHandler.postDelayed(this, POLL_INTERVAL)
         }
     }
@@ -201,6 +226,8 @@ class MainActivity : AppCompatActivity() {
                 Log.d(TAG, "onAvailableCameraUpdated: $list")
                 runOnUiThread {
                     if (list.isNullOrEmpty()) return@runOnUiThread
+                    // 记录全部可用相机部件，清理媒体文件时逐个遍历
+                    VideoTransferManager.knownCameraIndexes = list.toList()
                     val source = if (list.contains(ComponentIndexType.LEFT_OR_MAIN)) {
                         ComponentIndexType.LEFT_OR_MAIN
                     } else {
@@ -321,6 +348,16 @@ class MainActivity : AppCompatActivity() {
             operationLogDialog?.dismiss()
             operationLogDialog = OperationLogDialog(this).also { it.show() }
         }
+        // ★ 工具面板：媒体自动上传开关 + 补传失败媒体 + 一键清理无人机 SD 卡与遥控器媒体
+        bindMediaUploadSwitch(findViewById(R.id.swToolsAutoUpload))
+        findViewById<Button>(R.id.btnRetryFailedUpload).setLoggedClickListener {
+            functionMenu.close()
+            confirmRetryFailedUploads()
+        }
+        findViewById<Button>(R.id.btnClearMediaFiles).setLoggedClickListener {
+            functionMenu.close()
+            confirmClearMediaFiles()
+        }
         modeController = ModeController()
         DroneControlService.modeController = modeController
         setupModeController()
@@ -334,11 +371,29 @@ class MainActivity : AppCompatActivity() {
             deviceStatusReportManager = DeviceStatusReportManager {
                 liveStreamController.getConfiguredStreamAddress()
             }
+
+            // ★ 航点抓拍：独立的相机实例只做"取一帧"，不影响视觉降落那条常驻流
+            photoStore = WaypointPhotoStore(this)
+            photoCameraController = CameraController(currentCameraIndex)
+            photoCapturer = WaypointPhotoCapturer(
+                store = photoStore,
+                cameraProvider = { photoCameraController },
+                enabledProvider = { MediaTransferPreferences.isAutoUploadEnabled(this) }
+            ).also { capturer ->
+                capturer.onStatus = { message -> showTransientStatus(message) }
+                capturer.onCaptured = { file ->
+                    OperationLogger.state("航点抓拍", "已存图 ${file.name}")
+                }
+            }
+
             videoTransferManager = VideoTransferManager(
                 context = applicationContext,
                 streamAddressProvider = { liveStreamController.getConfiguredStreamAddress() },
-                cameraIndexProvider = { currentCameraIndex }
+                cameraIndexProvider = { currentCameraIndex },
+                photoStore = photoStore,
+                enabledProvider = { MediaTransferPreferences.isAutoUploadEnabled(this) }
             )
+            videoTransferManager.statusCallback = { message -> showTransientStatus(message) }
             videoTransferManager.onTransferFinished = { success, summary ->
                 OperationLogger.result("视频传输", success, summary)
                 val reason = if (success) {
@@ -370,10 +425,18 @@ class MainActivity : AppCompatActivity() {
             DroneControlService.onStopCameraStream = {
                 runCatching { testCameraController?.stopVideoStream() }
             }
+
+            // ★ 机载上报航点到位（0x79）→ 抓一帧图传画面，停录后随视频一起上传
+            DroneControlService.onWaypointArrived = { stopNumber, wpIndex ->
+                photoCapturer?.onWaypointArrived(stopNumber, wpIndex)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Controller init failed", e)
             showErrorOnUI("控制器初始化失败，请确保飞机已连接")
         }
+
+        // ★ 仅调试包：通过 adb 广播仿真"到点抓拍 / 开录 / 停录"，用于无飞行器时验证链路
+        registerDebugSimulationReceiver()
 
         fpvWidget.isCameraSourceNameVisible = false
         fpvWidget.isCameraSourceSideVisible = false
@@ -453,6 +516,8 @@ class MainActivity : AppCompatActivity() {
                                 pos,
                                 if (authoritative != null) lensForStream(authoritative) else lens
                             )
+                            // 抓帧用的相机实例跟随当前相机源，否则切镜头后抓到的是旧镜头画面
+                            photoCameraController?.updateCameraIndex(pos)
                         }
                     },
                     { e -> Log.e(TAG, "cameraSource error: ${e.message}") }
@@ -473,8 +538,70 @@ class MainActivity : AppCompatActivity() {
         compositeDisposable = null
     }
 
+    // ═══════════════════════════════════════════════════════
+    // ★ 仅调试包：仿真入口（便于无飞行器时走通链路）
+    //   adb shell am broadcast -a com.example.msdksample.DEBUG_SIM \
+    //       --es cmd wp_arrived --ei stop 3 --ei index 5 -p com.example.msdksample
+    //   adb shell am broadcast -a com.example.msdksample.DEBUG_SIM \
+    //       --es cmd record_start -p com.example.msdksample
+    // ═══════════════════════════════════════════════════════
+    private var debugSimReceiver: BroadcastReceiver? = null
+
+    private fun registerDebugSimulationReceiver() {
+        val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (!debuggable) return
+        if (debugSimReceiver != null) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent == null) return
+                when (intent.getStringExtra("cmd")) {
+                    "wp_arrived" -> {
+                        val stop = intent.getIntExtra("stop", 1)
+                        val index = intent.getIntExtra("index", 1)
+                        Log.i(TAG, "DEBUG_SIM 航点到位 stop=$stop index=$index")
+                        OperationLogger.operation("仿真", "航点到位 stop=$stop index=$index")
+                        val callback = DroneControlService.onWaypointArrived
+                        if (callback == null) {
+                            Log.w(TAG, "DEBUG_SIM onWaypointArrived 未注入")
+                        } else {
+                            callback.invoke(stop, index)
+                        }
+                    }
+                    "record_start" -> {
+                        Log.i(TAG, "DEBUG_SIM 开录：先切录像模式 ctrl=${photoCameraController != null}")
+                        photoCameraController?.setMode(false) { ok, msg ->
+                            Log.i(TAG, "DEBUG_SIM 切模式 ok=$ok msg=$msg")
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                photoCameraController?.startRecord { ok2, msg2 ->
+                                    Log.i(TAG, "DEBUG_SIM 开录结果 ok=$ok2 msg=$msg2")
+                                }
+                            }, 900)
+                        }
+                    }
+                    "record_stop" -> {
+                        Log.i(TAG, "DEBUG_SIM 停录")
+                        photoCameraController?.stopRecord { ok, msg ->
+                            Log.i(TAG, "DEBUG_SIM 停录结果 ok=$ok msg=$msg")
+                        }
+                    }
+                    else -> Log.w(TAG, "DEBUG_SIM 未知指令: ${intent.getStringExtra("cmd")}")
+                }
+            }
+        }
+        debugSimReceiver = receiver
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            IntentFilter(DEBUG_SIM_ACTION),
+            ContextCompat.RECEIVER_EXPORTED
+        )
+        Log.i(TAG, "DEBUG_SIM 广播已注册，action=$DEBUG_SIM_ACTION")
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        debugSimReceiver?.let { runCatching { unregisterReceiver(it) } }
+        debugSimReceiver = null
         collectDialog?.dismiss()
         collectDialog = null
         if (::modeController.isInitialized) modeController.release()
@@ -503,6 +630,11 @@ class MainActivity : AppCompatActivity() {
         DroneControlService.onStartCameraStream = null
         DroneControlService.onStopCameraStream = null
         DroneControlService.onResetVisionTracking = null
+        DroneControlService.onWaypointArrived = null
+        photoCapturer?.release()
+        photoCapturer = null
+        transientStatusHideRunnable?.let { pollHandler.removeCallbacks(it) }
+        transientStatusHideRunnable = null
         if (::modeController.isInitialized && DroneControlService.modeController === modeController) {
             DroneControlService.modeController = null
         }
@@ -599,6 +731,53 @@ class MainActivity : AppCompatActivity() {
                 }
             )
         } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * 云台角度常驻显示：跟随当前相机源的云台姿态，500ms 刷新。
+     * 读不到时显示 "--"，不影响其它遥测。
+     */
+    private fun pollGimbalAttitude() {
+        try {
+            KeyManager.getInstance().getValue(
+                KeyTools.createKey(GimbalKey.KeyGimbalAttitude, currentCameraIndex),
+                object : CommonCallbacks.CompletionCallbackWithParam<Attitude> {
+                    override fun onSuccess(value: Attitude?) {
+                        value ?: return
+                        runOnUiThread {
+                            gimbalPitchText.text = "P %+.1f".format(value.pitch)
+                            gimbalRollText.text = "R %+.1f".format(value.roll)
+                            gimbalYawText.text = "Y %+.1f".format(value.yaw)
+                        }
+                    }
+
+                    override fun onFailure(error: IDJIError) = Unit
+                }
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * 媒体传输瞬态提示：拉取 SD 卡 / 上传照片 / 上传视频期间显示，
+     * 每来一条新消息就重置计时，最后一条消息之后 3 秒自动消失。
+     */
+    private fun showTransientStatus(message: String) {
+        if (message.isBlank()) return
+        runOnUiThread {
+            if (!::transientStatusLayout.isInitialized) return@runOnUiThread
+            transientStatusText.text = message
+            transientStatusLayout.visibility = View.VISIBLE
+            transientStatusHideRunnable?.let { pollHandler.removeCallbacks(it) }
+            val hide = Runnable {
+                if (::transientStatusLayout.isInitialized) {
+                    transientStatusLayout.visibility = View.GONE
+                }
+                transientStatusHideRunnable = null
+            }
+            transientStatusHideRunnable = hide
+            pollHandler.postDelayed(hide, TRANSIENT_STATUS_DURATION_MS)
         }
     }
 
@@ -848,6 +1027,11 @@ class MainActivity : AppCompatActivity() {
         taskStatusText = findViewById(R.id.taskStatusText)
         missionStatusText = findViewById(R.id.missionStatusText)
         motorTemperatureText = findViewById(R.id.motorTemperatureText)
+        gimbalPitchText = findViewById(R.id.gimbalPitchText)
+        gimbalRollText = findViewById(R.id.gimbalRollText)
+        gimbalYawText = findViewById(R.id.gimbalYawText)
+        transientStatusLayout = findViewById(R.id.transientStatusLayout)
+        transientStatusText = findViewById(R.id.transientStatusText)
         liveStreamLayout = findViewById(R.id.liveStreamLayout)
         liveStreamAddressText = findViewById(R.id.liveStreamAddressText)
         liveStreamStatusText = findViewById(R.id.liveStreamStatusText)
@@ -1948,6 +2132,131 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /**
+     * 绑定“媒体自动上传”开关。
+     *
+     * 工具面板里的开关常驻，设置对话框里的开关每次新建；两处注册到同一列表，
+     * 任一处切换都会同步另一处并立即落盘，避免两个入口显示不一致。
+     */
+    private fun bindMediaUploadSwitch(
+        sw: androidx.appcompat.widget.SwitchCompat,
+        onChanged: ((Boolean) -> Unit)? = null
+    ) {
+        sw.isChecked = MediaTransferPreferences.isAutoUploadEnabled(this)
+        sw.setOnCheckedChangeListener { button, isChecked ->
+            if (syncingMediaUploadSwitch) return@setOnCheckedChangeListener
+            syncingMediaUploadSwitch = true
+            try {
+                mediaUploadSwitches.forEach { other ->
+                    if (other !== button && other.isChecked != isChecked) other.isChecked = isChecked
+                }
+            } finally {
+                syncingMediaUploadSwitch = false
+            }
+            applyMediaUploadEnabled(isChecked)
+            onChanged?.invoke(isChecked)
+        }
+        if (mediaUploadSwitches.none { it === sw }) mediaUploadSwitches.add(sw)
+    }
+
+    private fun applyMediaUploadEnabled(enabled: Boolean) {
+        MediaTransferPreferences.setAutoUploadEnabled(this, enabled)
+        OperationLogger.state("设置", "媒体自动上传${if (enabled) "开启" else "关闭"}")
+        if (!enabled && ::videoTransferManager.isInitialized) {
+            // 关闭时立即清掉已排队的上传任务和待传照片，不用等下一批
+            runCatching { videoTransferManager.cancelPendingMediaTransfer() }
+                .onFailure { Log.w(TAG, "取消排队媒体传输失败: ${it.message}") }
+        }
+        showTransientStatus(
+            if (enabled) "媒体自动上传已开启" else "媒体自动上传已关闭：视频与图片均不上传"
+        )
+    }
+
+    /** 手动补传自动上传失败的媒体，二次确认后再执行。 */
+    private fun confirmRetryFailedUploads() {
+        if (!::videoTransferManager.isInitialized) {
+            Toast.makeText(this, "媒体服务未就绪，请连接无人机后重试", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (VideoTransferManager.isMediaBusy()) {
+            Toast.makeText(this, "媒体任务进行中，请稍后再补传", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pending = runCatching { videoTransferManager.failedUploadSummary() }.getOrNull()
+        if (pending == null || pending.count == 0) {
+            showTransientStatus("没有上传失败的媒体需要补传")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("补传失败媒体")
+            .setMessage(
+                "有 ${pending.count} 个上传失败的媒体文件（共 ${formatFileSize(pending.bytes)}）。\n\n" +
+                    "将按原本的批次文件名重新上传到前端，成功后自动删除遥控器副本；" +
+                    "仍然失败的文件会继续保留，可以再次补传。\n\n" +
+                    "确认开始补传？"
+            )
+            .setNegativeButton("取消", null)
+            .setPositiveButton("开始补传") { _, _ ->
+                OperationLogger.state("工具", "请求补传 ${pending.count} 个失败媒体")
+                showTransientStatus("开始补传 ${pending.count} 个失败媒体")
+                videoTransferManager.retryFailedUploads { success, summary ->
+                    runOnUiThread {
+                        showTransientStatus(
+                            if (success) "补传完成：$summary" else "补传结束：$summary"
+                        )
+                        OperationLogger.result("补传失败媒体", success, summary)
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        val mega = 1024.0 * 1024.0
+        val kilo = 1024.0
+        return when {
+            bytes >= 1024L * 1024L * 1024L -> String.format(Locale.US, "%.2f GB", bytes / (mega * 1024.0))
+            bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / mega)
+            bytes >= 1024L -> String.format(Locale.US, "%.0f KB", bytes / kilo)
+            else -> "$bytes B"
+        }
+    }
+
+    /** 清除无人机 SD 卡与遥控器本地的全部视频、图片，二次确认后再执行。 */
+    private fun confirmClearMediaFiles() {
+        if (!::videoTransferManager.isInitialized) {
+            Toast.makeText(this, "媒体服务未就绪，请连接无人机后重试", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (VideoTransferManager.isMediaBusy()) {
+            Toast.makeText(this, "媒体传输进行中，请等传输结束后再清理", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("清除媒体文件")
+            .setMessage(
+                "将删除：\n" +
+                    "• 无人机 SD 卡上的全部视频和照片\n" +
+                    "• 遥控器本地缓存的视频与图片\n" +
+                    "• 遥控器中已导出的视频\n\n" +
+                    "删除后无法恢复，确认继续？"
+            )
+            .setNegativeButton("取消", null)
+            .setPositiveButton("确认清除") { _, _ ->
+                OperationLogger.state("工具", "请求清除 SD 卡与遥控器媒体文件")
+                showTransientStatus("正在清除媒体文件，请稍候")
+                videoTransferManager.clearAllMediaFiles { success, summary ->
+                    runOnUiThread {
+                        showTransientStatus(
+                            if (success) "媒体清理完成：$summary" else "媒体清理失败：$summary"
+                        )
+                        OperationLogger.result("清除媒体文件", success, summary)
+                    }
+                }
+            }
+            .show()
+    }
+
     private fun showSettingsDialog() {
         val dialogView = layoutInflater.inflate(R.layout.dialog_settings, null)
         dialogView.setTag(R.id.operation_log_scope, "设置")
@@ -2007,6 +2316,16 @@ class MainActivity : AppCompatActivity() {
                 setStatus("✅ 配置已刷新", 0xFF4CAF50.toInt())
             }
         }
+
+        // 媒体自动上传总开关：与工具面板共用同一份配置，切换时两处同步
+        val swAutoUpload = dialogView.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.swAutoUpload)
+        bindMediaUploadSwitch(swAutoUpload) { isChecked ->
+            setStatus(
+                if (isChecked) "媒体自动上传已开启" else "媒体自动上传已关闭：视频与图片均不上传",
+                if (isChecked) 0xFF4CAF50.toInt() else 0xFFFFA726.toInt()
+            )
+        }
+        dialog.setOnDismissListener { mediaUploadSwitches.remove(swAutoUpload) }
 
         btnClose.setLoggedClickListener { dialog.dismiss() }
         dialog.show()

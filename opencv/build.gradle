@@ -24,10 +24,7 @@ android {
 
     defaultConfig {
         minSdk 21
-        targetSdk 35
 
-        versionCode openCVersionCode
-        versionName openCVersionName
 
         externalNativeBuild {
             cmake {
@@ -96,6 +93,12 @@ android {
             withSourcesJar()
             withJavadocJar()
         }
+    }
+    lint {
+        targetSdk 35
+    }
+    testOptions {
+        targetSdk 35
     }
 }
 

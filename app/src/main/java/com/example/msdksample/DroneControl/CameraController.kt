@@ -20,19 +20,89 @@ import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.interfaces.ICameraStreamManager
 
 class CameraController(
-    private val cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
+    private var cameraIndex: ComponentIndexType = ComponentIndexType.LEFT_OR_MAIN
 ) {
+
+    /** 切换镜头后同步抓帧/推流使用的相机索引 */
+    fun updateCameraIndex(index: ComponentIndexType) {
+        if (index == ComponentIndexType.UNKNOWN || index == cameraIndex) return
+        cameraIndex = index
+        log("cameraIndex -> $index")
+    }
 
     companion object {
         private const val TAG = "CameraController"
         private const val PHOTO_SETTLE_MS = 800L
         private const val RECORD_SETTLE_MS = 300L
+
+        /** 抓帧最长等待时间：超过就放弃并回报失败，避免占着监听不放 */
+        private const val CAPTURE_TIMEOUT_MS = 2_500L
     }
+
+    /**
+     * 单帧快照。只用于"到点抓一张图"，不参与常驻视觉处理。
+     * bytes 是 YUV420_888 原始数据（I420 平面序），尺寸由 width/height 给出。
+     */
+    data class FrameSnapshot(
+        val bytes: ByteArray,
+        val width: Int,
+        val height: Int,
+        val capturedAtMs: Long
+    )
+
+    private class PendingCapture(val onResult: (FrameSnapshot?) -> Unit)
 
     private val mainHandler = Handler(Looper.getMainLooper())
     var logCallback: ((String) -> Unit)? = null
 
     var frameCallback: ((data: ByteArray, offset: Int, length: Int, width: Int, height: Int) -> Unit)? = null
+
+    private val captureLock = Any()
+    @Volatile private var pendingCapture: PendingCapture? = null
+    @Volatile private var captureListenerRegistered = false
+
+    /**
+     * 抓帧专用监听：取到第一帧就摘掉自己。
+     * 常驻的 [frameListener] 是给视觉降落用的，两者互不干扰。
+     */
+    private val captureListener = object : ICameraStreamManager.CameraFrameListener {
+        override fun onFrame(
+            frameData: ByteArray,
+            offset: Int,
+            length: Int,
+            width: Int,
+            height: Int,
+            format: ICameraStreamManager.FrameFormat
+        ) {
+            val pending = synchronized(captureLock) {
+                val current = pendingCapture ?: return
+                pendingCapture = null
+                current
+            }
+            mainHandler.removeCallbacks(captureTimeout)
+            unregisterCaptureListener()
+            val snapshot = runCatching {
+                FrameSnapshot(
+                    bytes = frameData.copyOfRange(offset, offset + length),
+                    width = width,
+                    height = height,
+                    capturedAtMs = android.os.SystemClock.elapsedRealtime()
+                )
+            }.onFailure { Log.w(TAG, "抓帧数据拷贝失败: ${it.message}") }.getOrNull()
+            mainHandler.post { pending.onResult(snapshot) }
+        }
+    }
+
+    private val captureTimeout = Runnable {
+        val pending = synchronized(captureLock) {
+            val current = pendingCapture ?: return@Runnable
+            pendingCapture = null
+            current
+        }
+        unregisterCaptureListener()
+        log("抓帧超时：${CAPTURE_TIMEOUT_MS}ms 内没有收到视频帧")
+        pending.onResult(null)
+    }
 
     private val frameListener = object : ICameraStreamManager.CameraFrameListener {
         override fun onFrame(
@@ -65,6 +135,64 @@ class CameraController(
     fun stopVideoStream() {
         log("CMD: stopVideoStream")
         MediaDataCenter.getInstance().cameraStreamManager.removeFrameListener(frameListener)
+    }
+
+    /**
+     * 抓取当前视频流的一帧（一次性）。
+     *
+     * 与 [startVideoStream] 的常驻监听完全独立：这里临时注册一个专用监听，
+     * 拿到第一帧就立即摘除，不会长时间占用解码带宽，也不会改动相机模式，
+     * 因此录像过程中抓图不会打断录像。画质即图传流分辨率。
+     *
+     * 失败或超时回调 null，调用方据此跳过本次抓图。
+     */
+    fun captureFrame(onResult: (FrameSnapshot?) -> Unit) {
+        val accepted = synchronized(captureLock) {
+            if (pendingCapture != null) {
+                false
+            } else {
+                pendingCapture = PendingCapture(onResult)
+                true
+            }
+        }
+        if (!accepted) {
+            log("抓帧请求被忽略：上一帧仍在等待")
+            mainHandler.post { onResult(null) }
+            return
+        }
+        log("CMD: captureFrame")
+        registerCaptureListener()
+        mainHandler.removeCallbacks(captureTimeout)
+        mainHandler.postDelayed(captureTimeout, CAPTURE_TIMEOUT_MS)
+    }
+
+    private fun registerCaptureListener() {
+        if (captureListenerRegistered) return
+        try {
+            MediaDataCenter.getInstance().cameraStreamManager.addFrameListener(
+                cameraIndex,
+                ICameraStreamManager.FrameFormat.YUV420_888,
+                captureListener
+            )
+            captureListenerRegistered = true
+        } catch (e: Exception) {
+            Log.e(TAG, "注册抓帧监听失败: ${e.message}", e)
+            val pending = synchronized(captureLock) {
+                val current = pendingCapture ?: return
+                pendingCapture = null
+                current
+            }
+            mainHandler.removeCallbacks(captureTimeout)
+            mainHandler.post { pending.onResult(null) }
+        }
+    }
+
+    private fun unregisterCaptureListener() {
+        if (!captureListenerRegistered) return
+        captureListenerRegistered = false
+        runCatching {
+            MediaDataCenter.getInstance().cameraStreamManager.removeFrameListener(captureListener)
+        }.onFailure { Log.w(TAG, "摘除抓帧监听失败: ${it.message}") }
     }
 
     fun setMode(isPhoto: Boolean, onResult: (Boolean, String) -> Unit) {

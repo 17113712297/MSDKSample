@@ -62,6 +62,13 @@ class DroneControlService : Service() {
         @Volatile
         var onPrepareVisualLanding: (() -> Unit)? = null
 
+        /**
+         * 机载上报航点到位（0x79）：(stopNumber, wpIndex)。
+         * 由 MainActivity 注入，收到后抓一帧图传画面。
+         */
+        @Volatile
+        var onWaypointArrived: ((stopNumber: Int, wpIndex: Int) -> Unit)? = null
+
         // ⭐【速度面板协调标志】：VelocityControlPanel 激活时置 true，
         //   用于拦截 CMD_VEL 防止与本端手动速度控制冲突
         @Volatile
@@ -363,6 +370,24 @@ class DroneControlService : Service() {
                     Log.w(TAG, "MISSION_STATE 载荷解析失败 (len=${frame.payload.size})")
                 } else {
                     missionController?.updateState(p.state, p.wpIndex, p.wpTotal)
+                }
+            }
+
+            // ── 航点到位（机载 → RC）：触发抓图，不需要 ACK ──────
+            // 只做投递，抓帧与编码都在主线程/工作线程完成，
+            // 绝不在 PSDK 数据通道回调线程里做耗时动作。
+            DroneCommProtocol.CMD_WP_ARRIVED -> {
+                val p = DroneCommProtocol.parseWpArrivedPayload(frame.payload)
+                if (p == null) {
+                    Log.w(TAG, "WP_ARRIVED 载荷解析失败 (len=${frame.payload.size})")
+                } else {
+                    Log.i(TAG, "航点到位: stop=${p.stopNumber} index=${p.wpIndex}")
+                    val callback = onWaypointArrived
+                    if (callback == null) {
+                        Log.w(TAG, "onWaypointArrived 未注入，忽略本次抓图")
+                    } else {
+                        mainHandler.post { callback(p.stopNumber, p.wpIndex) }
+                    }
                 }
             }
 

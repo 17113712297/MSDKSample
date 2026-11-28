@@ -10,7 +10,7 @@ buildscript {
         classpath 'com.android.tools.build:gradle:8.13.2'
 
         //推荐的Kotlin版本，如果你需要引入UXSDK框架，则建议使用推荐版本，否则可能会出现编译兼容性问题
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0" //DJI MSDK 建议的版本
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0' //DJI MSDK 建议的版本
         // ... (remaining code)
     }
 }

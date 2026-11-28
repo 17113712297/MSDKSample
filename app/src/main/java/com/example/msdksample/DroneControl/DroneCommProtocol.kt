@@ -162,6 +162,16 @@ object DroneCommProtocol {
     const val CMD_RETURN: Byte = 0x77  // 返航：暂停 → 返航，反向重放航点回到第一个点
 
     // ═══════════════════════════════════════════════════════
+// ★ 航点到位事件 (0x79，Jetson → RC)
+//   机载 waypoint_tracker 的 stop_arrived 经桥接层转成本帧，
+//   遥控器收到后抓一帧图传画面，停录后随视频一起上传。
+//   payload: [stopNumber:u16 LE][wpIndex:u16 LE]
+//   只做单向通知，不需要 ACK；返航途中机载不发该帧，天然不会误触发。
+// ═══════════════════════════════════════════════════════
+    const val CMD_WP_ARRIVED: Byte = 0x79
+    const val WP_ARRIVED_PAYLOAD_LEN = 4
+
+    // ═══════════════════════════════════════════════════════
 // ★ 状态上报 (0x93，Jetson → RC)
 //   payload: [state:1][wpIndex:1][wpTotal:1][reserved:1]
 // ═══════════════════════════════════════════════════════
@@ -354,6 +364,21 @@ object DroneCommProtocol {
     }
 
     /**
+     * 解析航点到位事件 (0x79)。
+     * payload: [stopNumber:u16 LE][wpIndex:u16 LE]
+     *
+     * stopNumber 是机载航点表里该点的停留编号（从 1 开始，0 表示不是停留点），
+     * 机载只在真正需要停留的航点发这一帧，所以收到就该抓图。
+     */
+    fun parseWpArrivedPayload(payload: ByteArray): WpArrivedPayload? {
+        if (payload.size < WP_ARRIVED_PAYLOAD_LEN) return null
+        val stopNumber = (payload[0].toInt() and 0xFF) or ((payload[1].toInt() and 0xFF) shl 8)
+        val wpIndex = (payload[2].toInt() and 0xFF) or ((payload[3].toInt() and 0xFF) shl 8)
+        if (stopNumber <= 0) return null
+        return WpArrivedPayload(stopNumber = stopNumber, wpIndex = wpIndex)
+    }
+
+    /**
      * 编码带载荷帧 → [0xAA | cmd | payload.len | payload... | XOR]
      * 与 Jetson 侧 drone_comm::encode_payload 字节级一致。
      */
@@ -465,6 +490,12 @@ object DroneCommProtocol {
         val isOn:   Boolean get() = mode == AUX_LIGHT_ON
         val isAuto: Boolean get() = mode == AUX_LIGHT_AUTO
     }
+
+    /** 航点到位事件：停留点编号 + 航点索引 */
+    data class WpArrivedPayload(
+        val stopNumber: Int,
+        val wpIndex: Int
+    )
 
     /** 机载状态上报：状态码 + 当前航点索引/总数 */
     data class MissionStatePayload(
